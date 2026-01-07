@@ -1,418 +1,268 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/fabianvf/llemulator/internal/models"
+	"net/http/httptest"
+	"encoding/json"
+	"bytes"
+	"net/http"
+	"io"
+	
 	"github.com/fabianvf/llemulator/internal/script"
+	"github.com/fabianvf/llemulator/internal/models"
 )
 
-// TestSSEFormat verifies correct event-stream format
-func TestSSEFormat(t *testing.T) {
+// TestStreamingChatCompletion tests the streaming chat completion functionality
+func TestStreamingChatCompletion(t *testing.T) {
 	server := NewServer()
 	
-	// Setup test response
-	events := []script.SSEEvent{
-		{Data: json.RawMessage(`{"test": "data1"}`)},
-		{Data: json.RawMessage(`{"test": "data2"}`)},
-		{Data: json.RawMessage(`"[DONE]"`)},
+	// Load a script with a response
+	token := "test-token"
+	testScript := script.Script{
+		Reset:     true,
+		Responses: "This is a test response for streaming",
 	}
 	
-	recorder := httptest.NewRecorder()
-	server.streamSSEResponse(recorder, events)
+	if err := server.engine.LoadScript(token, testScript); err != nil {
+		t.Fatalf("Failed to load script: %v", err)
+	}
 	
+	// Create a streaming request
+	payload := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []map[string]interface{}{
+			{"role": "user", "content": "Test message"},
+		},
+		"stream": true,
+	}
+	
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	
+	recorder := httptest.NewRecorder()
+	server.HandleOpenAIRequest(recorder, req)
+	
+	// Check response
 	response := recorder.Result()
 	
-	// Check headers
+	// Verify SSE headers
 	if ct := response.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("Expected Content-Type text/event-stream, got %s", ct)
 	}
-	if cc := response.Header.Get("Cache-Control"); cc != "no-cache" {
-		t.Errorf("Expected Cache-Control no-cache, got %s", cc)
-	}
-	if conn := response.Header.Get("Connection"); conn != "keep-alive" {
-		t.Errorf("Expected Connection keep-alive, got %s", conn)
-	}
 	
-	// Parse SSE events
-	body := recorder.Body.String()
-	lines := strings.Split(body, "\n")
+	// Read and verify SSE events
+	bodyBytes, _ := io.ReadAll(response.Body)
+	bodyStr := string(bodyBytes)
 	
-	// Verify SSE format: "data: <json>\n\n"
-	eventCount := 0
-	for i := 0; i < len(lines); i++ {
-		if strings.HasPrefix(lines[i], "data: ") {
-			eventCount++
-			// Should be followed by empty line
-			if i+1 < len(lines) && lines[i+1] != "" {
-				t.Errorf("SSE event not followed by empty line at line %d", i)
-			}
-		}
+	// Should contain data: lines
+	if !strings.Contains(bodyStr, "data: ") {
+		t.Error("Response should contain SSE data events")
 	}
 	
-	if eventCount != 3 {
-		t.Errorf("Expected 3 SSE events, found %d", eventCount)
+	// Should end with [DONE]
+	if !strings.Contains(bodyStr, "data: [DONE]") {
+		t.Error("Stream should end with [DONE]")
 	}
 	
-	// Verify [DONE] event
-	if !strings.Contains(body, "data: [DONE]") {
-		t.Error("Missing [DONE] termination event")
-	}
-}
-
-// TestStreamChunking verifies words are properly separated
-func TestStreamChunking(t *testing.T) {
-	server := NewServer()
-	
-	content := "This is a test message with multiple words"
-	req := map[string]interface{}{
-		"model":  "gpt-4",
-		"stream": true,
-	}
-	
-	recorder := httptest.NewRecorder()
-	server.writeChatCompletionStream(recorder, content, req)
-	
-	// Parse streamed chunks
-	body := recorder.Body.String()
-	lines := strings.Split(body, "\n")
-	
-	var chunks []string
+	// Parse one of the events to verify structure
+	lines := strings.Split(bodyStr, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
-			data := strings.TrimPrefix(line, "data: ")
-			
-			var chunk models.ChatCompletion
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				continue // Skip non-JSON lines
+			dataStr := strings.TrimPrefix(line, "data: ")
+			var chunk map[string]interface{}
+			if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
+				t.Errorf("Failed to parse chunk: %v", err)
 			}
-			
-			if chunk.Choices[0].Delta != nil && chunk.Choices[0].Delta.Content != "" {
-				chunks = append(chunks, chunk.Choices[0].Delta.Content)
+			// Verify chunk has expected structure
+			if object, ok := chunk["object"].(string); !ok || object != "chat.completion.chunk" {
+				t.Errorf("Expected object 'chat.completion.chunk', got %v", chunk["object"])
 			}
+			break
 		}
-	}
-	
-	// Reconstruct message from chunks
-	reconstructed := strings.Join(chunks, " ")
-	
-	// Should preserve the original message with proper spacing
-	if !strings.Contains(reconstructed, "test message") {
-		t.Errorf("Chunks not properly separated. Got: %s", reconstructed)
-	}
-	
-	// Verify we got multiple chunks (not sent all at once)
-	if len(chunks) < 3 {
-		t.Errorf("Expected multiple chunks for streaming, got %d", len(chunks))
 	}
 }
 
-// TestStreamCompletion verifies proper termination sequence
-func TestStreamCompletion(t *testing.T) {
+// TestStreamingCompletion tests the streaming completion functionality
+func TestStreamingCompletion(t *testing.T) {
 	server := NewServer()
 	
-	content := "Short message"
-	req := map[string]interface{}{
-		"model":  "gpt-4",
+	// Load a script with a response
+	token := "test-token"
+	testScript := script.Script{
+		Reset:     true,
+		Responses: "This is a test completion response",
+	}
+	
+	if err := server.engine.LoadScript(token, testScript); err != nil {
+		t.Fatalf("Failed to load script: %v", err)
+	}
+	
+	// Create a streaming request
+	payload := map[string]interface{}{
+		"model": "gpt-4",
+		"prompt": "Complete this",
 		"stream": true,
 	}
 	
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest("POST", "/v1/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	
 	recorder := httptest.NewRecorder()
-	server.writeChatCompletionStream(recorder, content, req)
+	server.HandleOpenAIRequest(recorder, req)
 	
-	body := recorder.Body.String()
-	lines := strings.Split(body, "\n")
+	// Check response
+	response := recorder.Result()
 	
-	// Track the sequence of events
-	var hasRole bool
-	var hasContent bool
-	var hasFinishReason bool
-	var hasDone bool
+	// Verify SSE headers
+	if ct := response.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Expected Content-Type text/event-stream, got %s", ct)
+	}
 	
+	// Read and verify SSE events
+	bodyBytes, _ := io.ReadAll(response.Body)
+	bodyStr := string(bodyBytes)
+	
+	// Should contain data: lines
+	if !strings.Contains(bodyStr, "data: ") {
+		t.Error("Response should contain SSE data events")
+	}
+	
+	// Should end with [DONE]
+	if !strings.Contains(bodyStr, "data: [DONE]") {
+		t.Error("Stream should end with [DONE]")
+	}
+	
+	// Parse one of the events to verify structure
+	lines := strings.Split(bodyStr, "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			
-			if data == "[DONE]" {
-				hasDone = true
-				continue
+		if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
+			dataStr := strings.TrimPrefix(line, "data: ")
+			var completion map[string]interface{}
+			if err := json.Unmarshal([]byte(dataStr), &completion); err != nil {
+				t.Errorf("Failed to parse completion: %v", err)
 			}
-			
-			var chunk models.ChatCompletion
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				continue
+			// Verify completion has expected structure
+			if object, ok := completion["object"].(string); !ok || object != "text_completion" {
+				t.Errorf("Expected object 'text_completion', got %v", completion["object"])
 			}
-			
-			if chunk.Choices[0].Delta != nil {
-				if chunk.Choices[0].Delta.Role == "assistant" {
-					hasRole = true
-				}
-				if chunk.Choices[0].Delta.Content != "" {
-					hasContent = true
-				}
-			}
-			
-			if chunk.Choices[0].FinishReason != nil && *chunk.Choices[0].FinishReason == "stop" {
-				hasFinishReason = true
-			}
-		}
-	}
-	
-	// Verify complete sequence
-	if !hasRole {
-		t.Error("Stream missing initial role chunk")
-	}
-	if !hasContent {
-		t.Error("Stream missing content chunks")
-	}
-	if !hasFinishReason {
-		t.Error("Stream missing finish_reason")
-	}
-	if !hasDone {
-		t.Error("Stream missing [DONE] termination")
-	}
-	
-	// Verify order: role -> content -> finish -> done
-	roleIndex := strings.Index(body, `"role":"assistant"`)
-	contentIndex := strings.Index(body, content)
-	finishIndex := strings.Index(body, `"finish_reason":"stop"`)
-	doneIndex := strings.Index(body, "[DONE]")
-	
-	if roleIndex > contentIndex || contentIndex > finishIndex || finishIndex > doneIndex {
-		t.Error("Stream events in wrong order")
-	}
-}
-
-// TestFlushBehavior verifies events flush immediately
-func TestFlushBehavior(t *testing.T) {
-	// This test simulates real streaming by checking timing
-	server := NewServer()
-	
-	// Create a custom ResponseWriter that tracks flushes
-	flushRecorder := &flushTracker{
-		ResponseWriter: httptest.NewRecorder(),
-		flushTimes:     []time.Time{},
-	}
-	
-	events := []script.SSEEvent{
-		{Data: json.RawMessage(`{"chunk": 1}`)},
-		{Data: json.RawMessage(`{"chunk": 2}`)},
-		{Data: json.RawMessage(`{"chunk": 3}`)},
-	}
-	
-	server.streamSSEResponse(flushRecorder, events)
-	
-	// Should have flushed after each event
-	if len(flushRecorder.flushTimes) != len(events) {
-		t.Errorf("Expected %d flushes, got %d", len(events), len(flushRecorder.flushTimes))
-	}
-	
-	// Verify flushes happen with delays (simulating streaming)
-	for i := 1; i < len(flushRecorder.flushTimes); i++ {
-		delay := flushRecorder.flushTimes[i].Sub(flushRecorder.flushTimes[i-1])
-		if delay < 5*time.Millisecond {
-			t.Error("Flushes happening too quickly, not simulating streaming")
+			break
 		}
 	}
 }
 
-// TestStreamErrors verifies error handling during stream
-func TestStreamErrors(t *testing.T) {
+// TestNonStreamingChatCompletion tests non-streaming chat completion
+func TestNonStreamingChatCompletion(t *testing.T) {
 	server := NewServer()
 	
-	testCases := []struct {
-		name        string
-		events      []script.SSEEvent
-		expectError bool
-	}{
-		{
-			name:        "Empty events",
-			events:      []script.SSEEvent{},
-			expectError: false, // Should handle gracefully
+	// Load a script with a response
+	token := "test-token"
+	testScript := script.Script{
+		Reset:     true,
+		Responses: "This is a non-streaming response",
+	}
+	
+	if err := server.engine.LoadScript(token, testScript); err != nil {
+		t.Fatalf("Failed to load script: %v", err)
+	}
+	
+	// Create a non-streaming request
+	payload := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []map[string]interface{}{
+			{"role": "user", "content": "Test message"},
 		},
-		{
-			name: "Malformed JSON in event",
-			events: []script.SSEEvent{
-				{Data: json.RawMessage(`{"valid": "json"}`)},
-				{Data: json.RawMessage(`{invalid json`)},
-				{Data: json.RawMessage(`"[DONE]"`)},
-			},
-			expectError: false, // Should continue streaming
-		},
-		{
-			name: "Very large event",
-			events: []script.SSEEvent{
-				{Data: json.RawMessage(`{"data": "` + strings.Repeat("x", 1000000) + `"}`)},
-			},
-			expectError: false, // Should handle large events
-		},
+		"stream": false,
 	}
 	
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			
-			// Should not panic
-			func() {
-				defer func() {
-					if r := recover(); r != nil && !tc.expectError {
-						t.Errorf("Unexpected panic: %v", r)
-					}
-				}()
-				
-				server.streamSSEResponse(recorder, tc.events)
-			}()
-			
-			// Should still have proper headers
-			response := recorder.Result()
-			if ct := response.Header.Get("Content-Type"); ct != "text/event-stream" {
-				t.Error("Lost Content-Type header after error")
-			}
-		})
-	}
-}
-
-// TestNonStreamingFlusher tests behavior when ResponseWriter doesn't support flushing
-func TestNonStreamingFlusher(t *testing.T) {
-	server := NewServer()
-	
-	// Create a ResponseWriter that doesn't implement http.Flusher
-	nonFlusher := &nonFlushingWriter{
-		ResponseWriter: httptest.NewRecorder(),
-	}
-	
-	events := []script.SSEEvent{
-		{Data: json.RawMessage(`{"test": "data"}`)},
-	}
-	
-	// Should handle gracefully without panicking
-	server.streamSSEResponse(nonFlusher, events)
-	
-	// Should have written error response
-	result := nonFlusher.ResponseWriter.(*httptest.ResponseRecorder).Result()
-	if result.StatusCode != http.StatusInternalServerError {
-		t.Errorf("Expected 500 error for non-flusher, got %d", result.StatusCode)
-	}
-}
-
-// TestConcurrentStreaming tests concurrent streaming requests
-func TestConcurrentStreaming(t *testing.T) {
-	server := NewServer()
-	
-	// Run multiple streaming requests concurrently
-	concurrency := 10
-	done := make(chan bool, concurrency)
-	
-	for i := 0; i < concurrency; i++ {
-		go func(id int) {
-			recorder := httptest.NewRecorder()
-			
-			content := fmt.Sprintf("Message %d", id)
-			req := map[string]interface{}{
-				"model":  "gpt-4",
-				"stream": true,
-			}
-			
-			server.writeChatCompletionStream(recorder, content, req)
-			
-			// Verify response contains expected content
-			body := recorder.Body.String()
-			if !strings.Contains(body, content) {
-				t.Errorf("Stream %d missing content", id)
-			}
-			if !strings.Contains(body, "[DONE]") {
-				t.Errorf("Stream %d missing termination", id)
-			}
-			
-			done <- true
-		}(i)
-	}
-	
-	// Wait for all streams to complete
-	for i := 0; i < concurrency; i++ {
-		<-done
-	}
-}
-
-// Helper types for testing
-
-type flushTracker struct {
-	http.ResponseWriter
-	flushTimes []time.Time
-}
-
-func (f *flushTracker) Flush() {
-	f.flushTimes = append(f.flushTimes, time.Now())
-	if flusher, ok := f.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
-type nonFlushingWriter struct {
-	http.ResponseWriter
-}
-
-// TestStreamingWordBoundaries verifies words are complete, not partial
-func TestStreamingWordBoundaries(t *testing.T) {
-	server := NewServer()
-	
-	// Message with punctuation and special characters
-	content := "Hello, world! This is a test-message with numbers: 123."
-	req := map[string]interface{}{
-		"model":  "gpt-4",
-		"stream": true,
-	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	
 	recorder := httptest.NewRecorder()
-	server.writeChatCompletionStream(recorder, content, req)
+	server.HandleOpenAIRequest(recorder, req)
 	
-	body := recorder.Body.String()
-	scanner := bufio.NewScanner(strings.NewReader(body))
+	// Check response
+	response := recorder.Result()
 	
-	var words []string
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
-			data := strings.TrimPrefix(line, "data: ")
-			
-			var chunk models.ChatCompletion
-			if err := json.Unmarshal([]byte(data), &chunk); err == nil {
-				if chunk.Choices[0].Delta != nil && chunk.Choices[0].Delta.Content != "" {
-					words = append(words, chunk.Choices[0].Delta.Content)
-				}
-			}
-		}
+	// Verify JSON content type
+	if ct := response.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Expected Content-Type application/json, got %s", ct)
 	}
 	
-	// Each chunk should be a complete word or punctuation
-	for _, word := range words {
-		// Should not have partial words
-		if strings.HasPrefix(word, " ") || strings.HasSuffix(word, " ") {
-			continue // Space handling is ok
-		}
-		
-		// Check it's a complete token (word, number, or punctuation)
-		if len(word) > 0 && !strings.ContainsAny(word, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!.,?-:") {
-			t.Errorf("Chunk appears to be partial word: '%s'", word)
-		}
+	// Parse response
+	var completion models.ChatCompletion
+	if err := json.NewDecoder(response.Body).Decode(&completion); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
 	}
 	
-	// Reconstruct and verify message integrity
-	reconstructed := strings.Join(words, " ")
-	reconstructed = strings.ReplaceAll(reconstructed, " , ", ", ")
-	reconstructed = strings.ReplaceAll(reconstructed, " ! ", "! ")
-	reconstructed = strings.ReplaceAll(reconstructed, " . ", ". ")
-	reconstructed = strings.ReplaceAll(reconstructed, " : ", ": ")
+	// Verify response structure
+	if completion.Object != "chat.completion" {
+		t.Errorf("Expected object 'chat.completion', got %s", completion.Object)
+	}
 	
-	// Should maintain the essence of the message
-	if !strings.Contains(reconstructed, "Hello") || !strings.Contains(reconstructed, "world") {
-		t.Errorf("Message corrupted during streaming: %s", reconstructed)
+	if len(completion.Choices) != 1 {
+		t.Errorf("Expected 1 choice, got %d", len(completion.Choices))
+	}
+	
+	if completion.Choices[0].Message.Content != "This is a non-streaming response" {
+		t.Errorf("Expected response content, got %s", completion.Choices[0].Message.Content)
+	}
+}
+
+// TestEmptyRequestBody tests handling of empty request body
+func TestEmptyRequestBody(t *testing.T) {
+	server := NewServer()
+	
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	
+	recorder := httptest.NewRecorder()
+	server.HandleOpenAIRequest(recorder, req)
+	
+	// Should get an error for no matching rule (empty message)
+	response := recorder.Result()
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", response.StatusCode)
+	}
+	
+	var errorResp models.ErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&errorResp); err != nil {
+		t.Fatalf("Failed to parse error response: %v", err)
+	}
+	
+	if errorResp.Error.Type != "server_error" {
+		t.Errorf("Expected error type 'server_error', got %s", errorResp.Error.Type)
+	}
+}
+
+// TestMissingAuthentication tests missing auth header
+func TestMissingAuthentication(t *testing.T) {
+	server := NewServer()
+	
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	// No auth header
+	
+	recorder := httptest.NewRecorder()
+	server.HandleOpenAIRequest(recorder, req)
+	
+	// Should get an auth error
+	response := recorder.Result()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected status 401, got %d", response.StatusCode)
+	}
+	
+	var errorResp models.ErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&errorResp); err != nil {
+		t.Fatalf("Failed to parse error response: %v", err)
+	}
+	
+	if errorResp.Error.Type != "auth_error" {
+		t.Errorf("Expected error type 'auth_error', got %s", errorResp.Error.Type)
 	}
 }

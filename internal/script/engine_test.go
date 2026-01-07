@@ -1,7 +1,6 @@
 package script
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -14,151 +13,81 @@ func TestNewEngine(t *testing.T) {
 	}
 }
 
-// TestExactMatchPriority verifies exact matches beat patterns
-func TestExactMatchPriority(t *testing.T) {
+// TestSimpleStringResponse tests a single string response
+func TestSimpleStringResponse(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
 	
 	script := Script{
-		Reset: true,
-		Rules: []Rule{
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/chat/completions",
-					Pattern: ".*hello.*", // Pattern that would match
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Pattern response",
-				},
-			},
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/chat/completions",
-					JSON:   json.RawMessage(`{"model": "gpt-4", "messages": [{"content": "hello world"}]}`),
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Exact match response",
-				},
-			},
-		},
+		Reset:     true,
+		Responses: "Hello, world!",
 	}
 	
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
 	
-	// Request that matches both rules
-	body := []byte(`{"model": "gpt-4", "messages": [{"content": "hello world"}]}`)
-	
-	response, err := engine.MatchRequest(token, "POST", "/v1/chat/completions", body)
+	// First request should match
+	response, err := engine.MatchRequest(token, "any message")
 	if err != nil {
 		t.Fatalf("Failed to match request: %v", err)
 	}
+	if response != "Hello, world!" {
+		t.Errorf("Expected 'Hello, world!', got '%s'", response)
+	}
 	
-	// Should prefer exact match over pattern
-	if response.Content != "Exact match response" {
-		t.Errorf("Expected exact match to take priority, got: %s", response.Content)
+	// Second request should fail (rule exhausted)
+	_, err = engine.MatchRequest(token, "another message")
+	if err == nil {
+		t.Error("Expected error for exhausted rule")
 	}
 }
 
-// TestPatternMatching verifies regex patterns work correctly
+// TestSequentialResponses tests array of responses
+func TestSequentialResponses(t *testing.T) {
+	engine := NewEngine()
+	token := "test-token"
+	
+	script := Script{
+		Reset:     true,
+		Responses: []interface{}{"First", "Second", "Third"},
+	}
+	
+	if err := engine.LoadScript(token, script); err != nil {
+		t.Fatalf("Failed to load script: %v", err)
+	}
+	
+	// Test sequential matching
+	expected := []string{"First", "Second", "Third"}
+	for i, exp := range expected {
+		response, err := engine.MatchRequest(token, "message "+string(rune(i)))
+		if err != nil {
+			t.Fatalf("Request %d failed: %v", i, err)
+		}
+		if response != exp {
+			t.Errorf("Request %d: expected '%s', got '%s'", i, exp, response)
+		}
+	}
+	
+	// Fourth request should fail
+	_, err := engine.MatchRequest(token, "fourth message")
+	if err == nil {
+		t.Error("Expected error after responses exhausted")
+	}
+}
+
+// TestPatternMatching verifies regex patterns work
 func TestPatternMatching(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
 	
-	testCases := []struct {
-		name    string
-		pattern string
-		message string
-		shouldMatch bool
-	}{
-		{"Simple match", "hello", "hello world", true},
-		{"No match", "goodbye", "hello world", false},
-		{"Regex match", "^hello.*world$", "hello beautiful world", true},
-		{"Case insensitive", "(?i)HELLO", "hello", true},
-		{"Number pattern", "\\d+", "I have 42 apples", true},
-		{"Email pattern", "[a-z]+@[a-z]+\\.[a-z]+", "email: test@example.com", true},
-	}
-	
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			script := Script{
-				Reset: true,
-				Rules: []Rule{
-					{
-						Match: MatchRule{
-							Pattern: tc.pattern,
-						},
-						Times: 1,
-						Response: ResponseRule{
-							Status:  200,
-							Content: "Matched!",
-						},
-					},
-				},
-			}
-			
-			if err := engine.LoadScript(token, script); err != nil {
-				t.Fatalf("Failed to load script: %v", err)
-			}
-			
-			body := []byte(`{"messages": [{"role": "user", "content": "` + tc.message + `"}]}`)
-			response, err := engine.MatchRequest(token, "POST", "/v1/chat/completions", body)
-			
-			if tc.shouldMatch {
-				if err != nil {
-					t.Errorf("Expected match but got error: %v", err)
-				}
-				if response == nil || response.Content != "Matched!" {
-					t.Error("Expected pattern to match but it didn't")
-				}
-			} else {
-				if err == nil && response != nil {
-					t.Error("Expected no match but got a response")
-				}
-			}
-		})
-	}
-}
-
-// TestJSONSubsetMatching verifies partial JSON matches work
-func TestJSONSubsetMatching(t *testing.T) {
-	engine := NewEngine()
-	token := "test-token"
-	
 	script := Script{
 		Reset: true,
-		Rules: []Rule{
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/chat/completions",
-					JSON:   json.RawMessage(`{"model": "gpt-4"}`), // Only match model
-				},
-				Times: 2,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "GPT-4 response",
-				},
-			},
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/chat/completions",
-					JSON:   json.RawMessage(`{"model": "gpt-3.5-turbo"}`),
-				},
-				Times: 2,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "GPT-3.5 response",
-				},
-			},
+		Responses: map[string]interface{}{
+			".*hello.*":         "Hi there!",
+			".*weather.*":       "It's sunny!",
+			"\\d+\\s*\\+\\s*\\d+": "Math detected!",
+			"exact match":       "Exact response",
 		},
 	}
 	
@@ -166,38 +95,36 @@ func TestJSONSubsetMatching(t *testing.T) {
 		t.Fatalf("Failed to load script: %v", err)
 	}
 	
-	// Request with gpt-4 and extra fields
-	body1 := []byte(`{
-		"model": "gpt-4",
-		"messages": [{"role": "user", "content": "test"}],
-		"temperature": 0.7,
-		"max_tokens": 100
-	}`)
-	
-	response1, err := engine.MatchRequest(token, "POST", "/v1/chat/completions", body1)
-	if err != nil {
-		t.Fatalf("Failed to match request: %v", err)
-	}
-	if response1.Content != "GPT-4 response" {
-		t.Errorf("Expected GPT-4 response, got: %s", response1.Content)
+	testCases := []struct {
+		message  string
+		expected string
+	}{
+		{"say hello please", "Hi there!"},
+		{"hello world", "Hi there!"},
+		{"what's the weather?", "It's sunny!"},
+		{"2 + 2", "Math detected!"},
+		{"exact match", "Exact response"},
+		{"no match", ""}, // Should error
 	}
 	
-	// Request with gpt-3.5-turbo
-	body2 := []byte(`{
-		"model": "gpt-3.5-turbo",
-		"messages": [{"role": "user", "content": "different test"}]
-	}`)
-	
-	response2, err := engine.MatchRequest(token, "POST", "/v1/chat/completions", body2)
-	if err != nil {
-		t.Fatalf("Failed to match request: %v", err)
-	}
-	if response2.Content != "GPT-3.5 response" {
-		t.Errorf("Expected GPT-3.5 response, got: %s", response2.Content)
+	for _, tc := range testCases {
+		response, err := engine.MatchRequest(token, tc.message)
+		if tc.expected == "" {
+			if err == nil {
+				t.Errorf("Expected error for message '%s'", tc.message)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("Failed to match '%s': %v", tc.message, err)
+			}
+			if response != tc.expected {
+				t.Errorf("Message '%s': expected '%s', got '%s'", tc.message, tc.expected, response)
+			}
+		}
 	}
 }
 
-// TestRuleCounters verifies rules decrement properly
+// TestRuleCounters verifies times counter works
 func TestRuleCounters(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
@@ -206,26 +133,14 @@ func TestRuleCounters(t *testing.T) {
 		Reset: true,
 		Rules: []Rule{
 			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/chat/completions",
-				},
-				Times: 2, // Should match exactly 2 times
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Limited response",
-				},
+				Pattern:  "test",
+				Response: "Limited response",
+				Times:    2,
 			},
 			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/chat/completions",
-				},
-				Times: -1, // Unlimited
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Fallback response",
-				},
+				Pattern:  "test",
+				Response: "Unlimited response",
+				Times:    -1, // Unlimited
 			},
 		},
 	}
@@ -234,46 +149,44 @@ func TestRuleCounters(t *testing.T) {
 		t.Fatalf("Failed to load script: %v", err)
 	}
 	
-	body := []byte(`{"model": "gpt-4"}`)
-	
-	// First request - should match first rule
-	response1, _ := engine.MatchRequest(token, "POST", "/v1/chat/completions", body)
-	if response1.Content != "Limited response" {
-		t.Errorf("First request should match limited rule, got: %s", response1.Content)
+	// First two should match limited rule
+	for i := 0; i < 2; i++ {
+		response, err := engine.MatchRequest(token, "test")
+		if err != nil {
+			t.Fatalf("Request %d failed: %v", i, err)
+		}
+		if response != "Limited response" {
+			t.Errorf("Request %d: expected limited response, got '%s'", i, response)
+		}
 	}
 	
-	// Second request - should still match first rule
-	response2, _ := engine.MatchRequest(token, "POST", "/v1/chat/completions", body)
-	if response2.Content != "Limited response" {
-		t.Errorf("Second request should match limited rule, got: %s", response2.Content)
-	}
-	
-	// Third request - first rule exhausted, should match fallback
-	response3, _ := engine.MatchRequest(token, "POST", "/v1/chat/completions", body)
-	if response3.Content != "Fallback response" {
-		t.Errorf("Third request should match fallback rule, got: %s", response3.Content)
+	// Subsequent requests should match unlimited rule
+	for i := 0; i < 5; i++ {
+		response, err := engine.MatchRequest(token, "test")
+		if err != nil {
+			t.Fatalf("Request %d failed: %v", i+2, err)
+		}
+		if response != "Unlimited response" {
+			t.Errorf("Request %d: expected unlimited response, got '%s'", i+2, response)
+		}
 	}
 }
 
-// TestUnmatchedBehavior verifies unmatched requests always error
-func TestUnmatchedBehavior(t *testing.T) {
+// TestMixedFormat tests mixing sequential and pattern responses  
+func TestMixedFormat(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
 	
 	script := Script{
 		Reset: true,
-		Rules: []Rule{
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/specific",
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Specific response",
-				},
+		Responses: []interface{}{
+			"First default",
+			map[string]interface{}{
+				"pattern":  ".*help.*",  // Make it a proper regex pattern
+				"response": "Help response",
+				"times":    2.0,  // Ensure it's a float for proper JSON parsing
 			},
+			"Second default",
 		},
 	}
 	
@@ -281,212 +194,200 @@ func TestUnmatchedBehavior(t *testing.T) {
 		t.Fatalf("Failed to load script: %v", err)
 	}
 	
-	// Request that doesn't match any rule should always error
-	body := []byte(`{"test": "unmatched"}`)
-	response, err := engine.MatchRequest(token, "POST", "/v1/unmatched", body)
+	// Rules are checked in order:
+	// 1. "First default" with no pattern (matches anything, times=1)
+	// 2. ".*help.*" pattern (times=2)  
+	// 3. "Second default" with no pattern (matches anything, times=1)
 	
+	// First request matches rule 1 (no pattern, matches anything)
+	response, _ := engine.MatchRequest(token, "anything")
+	if response != "First default" {
+		t.Errorf("Expected 'First default', got '%s'", response)
+	}
+	
+	// Now rule 1 is exhausted. "help" matches rule 2
+	response, err := engine.MatchRequest(token, "help me")
+	if err != nil {
+		t.Fatalf("First help failed: %v", err)
+	}
+	if response != "Help response" {
+		t.Errorf("Expected 'Help response', got '%s'", response)
+	}
+	
+	// Second help still matches rule 2 (has 1 use left)
+	response, err = engine.MatchRequest(token, "I need help")
+	if err != nil {
+		t.Fatalf("Second help failed: %v", err)
+	}
+	if response != "Help response" {
+		t.Errorf("Expected 'Help response' again, got '%s'", response)
+	}
+	
+	// Rule 2 is now exhausted. Next request matches rule 3
+	response, _ = engine.MatchRequest(token, "other")
+	if response != "Second default" {
+		t.Errorf("Expected 'Second default', got '%s'", response)
+	}
+	
+	// All rules exhausted, should error
+	_, err = engine.MatchRequest(token, "final")
 	if err == nil {
-		t.Error("Expected error for unmatched request")
-	}
-	if response != nil {
-		t.Error("Expected no response for unmatched request")
-	}
-	
-	// Error message should be helpful
-	if err != nil && !strings.Contains(err.Error(), "no matching rule") {
-		t.Errorf("Error message not helpful: %v", err)
+		t.Error("Expected error when all rules exhausted")
 	}
 }
 
-// TestResponseFormats verifies all response types supported
-func TestResponseFormats(t *testing.T) {
-	engine := NewEngine()
-	token := "test-token"
-	
-	script := Script{
-		Reset: true,
-		Rules: []Rule{
-			// Plain text response
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/text",
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Plain text response",
-				},
-			},
-			// JSON response
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/json",
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status: 200,
-					JSON:   json.RawMessage(`{"result": "success", "data": {"id": 123}}`),
-				},
-			},
-			// SSE response
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/stream",
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status: 200,
-					SSE: []SSEEvent{
-						{Data: json.RawMessage(`{"chunk": 1}`)},
-						{Data: json.RawMessage(`{"chunk": 2}`)},
-						{Data: json.RawMessage(`"[DONE]"`)},
-					},
-				},
-			},
-		},
-	}
-	
-	if err := engine.LoadScript(token, script); err != nil {
-		t.Fatalf("Failed to load script: %v", err)
-	}
-	
-	// Test text response
-	response1, _ := engine.MatchRequest(token, "POST", "/v1/text", nil)
-	if response1.Content != "Plain text response" {
-		t.Errorf("Expected text response, got: %s", response1.Content)
-	}
-	
-	// Test JSON response
-	response2, _ := engine.MatchRequest(token, "POST", "/v1/json", nil)
-	if response2.JSON == nil {
-		t.Error("Expected JSON response")
-	}
-	
-	// Test SSE response
-	response3, _ := engine.MatchRequest(token, "POST", "/v1/stream", nil)
-	if len(response3.SSE) != 3 {
-		t.Errorf("Expected 3 SSE events, got: %d", len(response3.SSE))
-	}
-}
-
-// TestScriptReset verifies script reset functionality
+// TestScriptReset verifies reset functionality
 func TestScriptReset(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
 	
 	// Load initial script
 	script1 := Script{
-		Reset: true,
-		Rules: []Rule{
-			{
-				Match: MatchRule{
-					Method: "GET",
-					Path:   "/v1/test",
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "First script",
-				},
-			},
-		},
+		Reset:     true,
+		Responses: "First script",
 	}
 	
 	if err := engine.LoadScript(token, script1); err != nil {
 		t.Fatalf("Failed to load first script: %v", err)
 	}
 	
-	// Verify first script works
-	response1, _ := engine.MatchRequest(token, "GET", "/v1/test", nil)
-	if response1.Content != "First script" {
+	response, _ := engine.MatchRequest(token, "test")
+	if response != "First script" {
 		t.Errorf("First script not loaded correctly")
 	}
 	
 	// Load second script with reset
 	script2 := Script{
-		Reset: true, // Should clear previous rules
-		Rules: []Rule{
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/different",
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Second script",
-				},
-			},
-		},
+		Reset:     true,
+		Responses: "Second script",
 	}
 	
 	if err := engine.LoadScript(token, script2); err != nil {
 		t.Fatalf("Failed to load second script: %v", err)
 	}
 	
-	// Old rule should not match
-	response2, err := engine.MatchRequest(token, "GET", "/v1/test", nil)
-	if err == nil && response2 != nil {
-		t.Error("Old rule should not match after reset")
+	response, _ = engine.MatchRequest(token, "test")
+	if response != "Second script" {
+		t.Errorf("Second script not loaded correctly")
 	}
 	
-	// New rule should match
-	response3, _ := engine.MatchRequest(token, "POST", "/v1/different", nil)
-	if response3.Content != "Second script" {
-		t.Errorf("Second script not loaded correctly")
+	// Load third script without reset (should append)
+	script3 := Script{
+		Reset:     false,
+		Responses: "Third script",
+	}
+	
+	if err := engine.LoadScript(token, script3); err != nil {
+		t.Fatalf("Failed to load third script: %v", err)
+	}
+	
+	// Should still have second script rule
+	response, _ = engine.MatchRequest(token, "test")
+	if response != "Third script" {
+		t.Errorf("Third script not appended correctly")
 	}
 }
 
-// TestComplexJSONMatching tests nested JSON matching
-func TestComplexJSONMatching(t *testing.T) {
+// TestTokenIsolation verifies different tokens don't interfere
+func TestTokenIsolation(t *testing.T) {
+	engine := NewEngine()
+	
+	// Load different scripts for different tokens
+	tokens := []string{"token1", "token2", "token3"}
+	for i, token := range tokens {
+		script := Script{
+			Reset:     true,
+			Responses: "Response for " + token,
+		}
+		if err := engine.LoadScript(token, script); err != nil {
+			t.Fatalf("Failed to load script for %s: %v", token, err)
+		}
+		
+		// Verify immediately
+		response, err := engine.MatchRequest(token, "test")
+		if err != nil {
+			t.Fatalf("Failed to match for %s: %v", token, err)
+		}
+		expected := "Response for " + token
+		if response != expected {
+			t.Errorf("Token %d: expected '%s', got '%s'", i, expected, response)
+		}
+	}
+}
+
+// TestExtractUserMessage tests message extraction from request bodies
+func TestExtractUserMessage(t *testing.T) {
+	testCases := []struct {
+		name     string
+		body     string
+		expected string
+	}{
+		{
+			name:     "Chat completion format",
+			body:     `{"messages":[{"role":"system","content":"Be helpful"},{"role":"user","content":"Hello world"}]}`,
+			expected: "Hello world",
+		},
+		{
+			name:     "Completion format",
+			body:     `{"prompt":"Complete this text"}`,
+			expected: "Complete this text",
+		},
+		{
+			name:     "Input field format",
+			body:     `{"input":"Process this input"}`,
+			expected: "Process this input",
+		},
+		{
+			name:     "Empty body",
+			body:     ``,
+			expected: "",
+		},
+		{
+			name:     "Invalid JSON",
+			body:     `{invalid}`,
+			expected: "",
+		},
+		{
+			name:     "No user message",
+			body:     `{"messages":[{"role":"system","content":"Be helpful"}]}`,
+			expected: "",
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ExtractUserMessage([]byte(tc.body))
+			if result != tc.expected {
+				t.Errorf("Expected '%s', got '%s'", tc.expected, result)
+			}
+		})
+	}
+}
+
+// TestNoMatchError verifies helpful error messages
+func TestNoMatchError(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
 	
 	script := Script{
-		Reset: true,
-		Rules: []Rule{
-			{
-				Match: MatchRule{
-					Method: "POST",
-					Path:   "/v1/chat/completions",
-					JSON: json.RawMessage(`{
-						"messages": [
-							{"role": "system", "content": "You are helpful"},
-							{"role": "user"}
-						]
-					}`),
-				},
-				Times: 1,
-				Response: ResponseRule{
-					Status:  200,
-					Content: "Matched complex structure",
-				},
-			},
-		},
+		Reset:     true,
+		Responses: "Only response",
 	}
 	
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
 	
-	// Request with matching structure plus extra fields
-	body := []byte(`{
-		"model": "gpt-4",
-		"messages": [
-			{"role": "system", "content": "You are helpful"},
-			{"role": "user", "content": "Hello world"}
-		],
-		"temperature": 0.5
-	}`)
+	// Use the response
+	engine.MatchRequest(token, "first")
 	
-	response, err := engine.MatchRequest(token, "POST", "/v1/chat/completions", body)
-	if err != nil {
-		t.Fatalf("Failed to match request: %v", err)
+	// Second should error with helpful message
+	_, err := engine.MatchRequest(token, "test message")
+	if err == nil {
+		t.Fatal("Expected error for unmatched message")
 	}
-	if response.Content != "Matched complex structure" {
-		t.Errorf("Complex JSON matching failed")
+	
+	if !strings.Contains(err.Error(), "test message") {
+		t.Errorf("Error should contain the message that failed to match: %v", err)
 	}
 }
