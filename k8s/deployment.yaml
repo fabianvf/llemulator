@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openai-emulator
+  labels:
+    app: openai-emulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openai-emulator
+  template:
+    metadata:
+      labels:
+        app: openai-emulator
+    spec:
+      containers:
+      - name: openai-emulator
+        image: openai-emulator:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PORT
+          value: "8080"
+        - name: DEBUG
+          value: "false"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
