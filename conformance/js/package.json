@@ -1,0 +1,15 @@
+{
+  "name": "openai-emulator-conformance-js",
+  "version": "1.0.0",
+  "description": "JavaScript conformance tests for OpenAI emulator",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
