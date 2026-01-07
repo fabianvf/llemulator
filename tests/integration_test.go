@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -16,12 +17,29 @@ import (
 	"github.com/fabianvf/llemulator/internal/server"
 )
 
+// Global test server URL
+var serverURL string
+var testServer *httptest.Server
+
+func TestMain(m *testing.M) {
+	// Check if we should use an external emulator (for CI)
+	if emulatorURL := os.Getenv("EMULATOR_URL"); emulatorURL != "" {
+		serverURL = emulatorURL
+	} else {
+		// Start an embedded test server for local testing
+		srv := server.NewServer()
+		testServer = httptest.NewServer(srv)
+		serverURL = testServer.URL
+		defer testServer.Close()
+	}
+
+	// Run all tests
+	code := m.Run()
+	os.Exit(code)
+}
+
 // TestEndToEndChatCompletion tests complete chat completion flow
 func TestEndToEndChatCompletion(t *testing.T) {
-	srv := server.NewServer()
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
-
 	token := "integration-test"
 
 	// Load script with simple response
@@ -31,7 +49,7 @@ func TestEndToEndChatCompletion(t *testing.T) {
 	}
 
 	scriptBody, _ := json.Marshal(scriptPayload)
-	scriptReq, _ := http.NewRequest("POST", ts.URL+"/_emulator/script", bytes.NewReader(scriptBody))
+	scriptReq, _ := http.NewRequest("POST", serverURL+"/_emulator/script", bytes.NewReader(scriptBody))
 	scriptReq.Header.Set("Authorization", "Bearer "+token)
 	scriptReq.Header.Set("Content-Type", "application/json")
 
@@ -54,7 +72,7 @@ func TestEndToEndChatCompletion(t *testing.T) {
 	}
 
 	chatBody, _ := json.Marshal(chatPayload)
-	chatReq, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", bytes.NewReader(chatBody))
+	chatReq, _ := http.NewRequest("POST", serverURL+"/v1/chat/completions", bytes.NewReader(chatBody))
 	chatReq.Header.Set("Authorization", "Bearer "+token)
 	chatReq.Header.Set("Content-Type", "application/json")
 
@@ -85,9 +103,6 @@ func TestEndToEndChatCompletion(t *testing.T) {
 
 // TestStreamingIntegration tests streaming chat completion
 func TestStreamingIntegration(t *testing.T) {
-	srv := server.NewServer()
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
 
 	token := "stream-test"
 
@@ -98,7 +113,7 @@ func TestStreamingIntegration(t *testing.T) {
 	}
 
 	scriptBody, _ := json.Marshal(scriptPayload)
-	scriptReq, _ := http.NewRequest("POST", ts.URL+"/_emulator/script", bytes.NewReader(scriptBody))
+	scriptReq, _ := http.NewRequest("POST", serverURL+"/_emulator/script", bytes.NewReader(scriptBody))
 	scriptReq.Header.Set("Authorization", "Bearer "+token)
 	scriptReq.Header.Set("Content-Type", "application/json")
 
@@ -114,7 +129,7 @@ func TestStreamingIntegration(t *testing.T) {
 	}
 
 	chatBody, _ := json.Marshal(chatPayload)
-	chatReq, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", bytes.NewReader(chatBody))
+	chatReq, _ := http.NewRequest("POST", serverURL+"/v1/chat/completions", bytes.NewReader(chatBody))
 	chatReq.Header.Set("Authorization", "Bearer "+token)
 	chatReq.Header.Set("Content-Type", "application/json")
 
@@ -155,9 +170,6 @@ func TestStreamingIntegration(t *testing.T) {
 
 // TestConcurrentTokenIsolation tests that different tokens are isolated
 func TestConcurrentTokenIsolation(t *testing.T) {
-	srv := server.NewServer()
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
 
 	tokens := []string{"token1", "token2", "token3"}
 	var wg sync.WaitGroup
@@ -175,7 +187,7 @@ func TestConcurrentTokenIsolation(t *testing.T) {
 			}
 
 			scriptBody, _ := json.Marshal(scriptPayload)
-			scriptReq, _ := http.NewRequest("POST", ts.URL+"/_emulator/script", bytes.NewReader(scriptBody))
+			scriptReq, _ := http.NewRequest("POST", serverURL+"/_emulator/script", bytes.NewReader(scriptBody))
 			scriptReq.Header.Set("Authorization", "Bearer "+tk)
 			scriptReq.Header.Set("Content-Type", "application/json")
 
@@ -194,7 +206,7 @@ func TestConcurrentTokenIsolation(t *testing.T) {
 				}
 
 				chatBody, _ := json.Marshal(chatPayload)
-				chatReq, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", bytes.NewReader(chatBody))
+				chatReq, _ := http.NewRequest("POST", serverURL+"/v1/chat/completions", bytes.NewReader(chatBody))
 				chatReq.Header.Set("Authorization", "Bearer "+tk)
 				chatReq.Header.Set("Content-Type", "application/json")
 
@@ -231,9 +243,6 @@ func TestConcurrentTokenIsolation(t *testing.T) {
 
 // TestExplicitTwoTokenIsolation verifies complete isolation between two tokens with interleaved requests
 func TestExplicitTwoTokenIsolation(t *testing.T) {
-	srv := server.NewServer()
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
 
 	tokenAnimals := "token-animals"
 	tokenColors := "token-colors"
@@ -245,7 +254,7 @@ func TestExplicitTwoTokenIsolation(t *testing.T) {
 	}
 
 	scriptBody, _ := json.Marshal(animalScript)
-	scriptReq, _ := http.NewRequest("POST", ts.URL+"/_emulator/script", bytes.NewReader(scriptBody))
+	scriptReq, _ := http.NewRequest("POST", serverURL+"/_emulator/script", bytes.NewReader(scriptBody))
 	scriptReq.Header.Set("Authorization", "Bearer "+tokenAnimals)
 	scriptReq.Header.Set("Content-Type", "application/json")
 
@@ -262,7 +271,7 @@ func TestExplicitTwoTokenIsolation(t *testing.T) {
 	}
 
 	scriptBody, _ = json.Marshal(colorScript)
-	scriptReq, _ = http.NewRequest("POST", ts.URL+"/_emulator/script", bytes.NewReader(scriptBody))
+	scriptReq, _ = http.NewRequest("POST", serverURL+"/_emulator/script", bytes.NewReader(scriptBody))
 	scriptReq.Header.Set("Authorization", "Bearer "+tokenColors)
 	scriptReq.Header.Set("Content-Type", "application/json")
 
@@ -282,7 +291,7 @@ func TestExplicitTwoTokenIsolation(t *testing.T) {
 		}
 
 		chatBody, _ := json.Marshal(chatPayload)
-		chatReq, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", bytes.NewReader(chatBody))
+		chatReq, _ := http.NewRequest("POST", serverURL+"/v1/chat/completions", bytes.NewReader(chatBody))
 		chatReq.Header.Set("Authorization", "Bearer "+token)
 		chatReq.Header.Set("Content-Type", "application/json")
 
@@ -423,7 +432,7 @@ func TestExplicitTwoTokenIsolation(t *testing.T) {
 	}
 
 	scriptBody, _ = json.Marshal(patternScript)
-	scriptReq, _ = http.NewRequest("POST", ts.URL+"/_emulator/script", bytes.NewReader(scriptBody))
+	scriptReq, _ = http.NewRequest("POST", serverURL+"/_emulator/script", bytes.NewReader(scriptBody))
 	scriptReq.Header.Set("Authorization", "Bearer "+tokenAnimals)
 	scriptReq.Header.Set("Content-Type", "application/json")
 	http.DefaultClient.Do(scriptReq)
@@ -443,9 +452,6 @@ func TestExplicitTwoTokenIsolation(t *testing.T) {
 
 // TestRequestSerialization tests that requests for same token serialize
 func TestRequestSerialization(t *testing.T) {
-	srv := server.NewServer()
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
 
 	token := "serialize-test"
 
@@ -456,7 +462,7 @@ func TestRequestSerialization(t *testing.T) {
 	}
 
 	scriptBody, _ := json.Marshal(scriptPayload)
-	scriptReq, _ := http.NewRequest("POST", ts.URL+"/_emulator/script", bytes.NewReader(scriptBody))
+	scriptReq, _ := http.NewRequest("POST", serverURL+"/_emulator/script", bytes.NewReader(scriptBody))
 	scriptReq.Header.Set("Authorization", "Bearer "+token)
 	scriptReq.Header.Set("Content-Type", "application/json")
 	http.DefaultClient.Do(scriptReq)
@@ -483,7 +489,7 @@ func TestRequestSerialization(t *testing.T) {
 			}
 
 			chatBody, _ := json.Marshal(chatPayload)
-			chatReq, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", bytes.NewReader(chatBody))
+			chatReq, _ := http.NewRequest("POST", serverURL+"/v1/chat/completions", bytes.NewReader(chatBody))
 			chatReq.Header.Set("Authorization", "Bearer "+token)
 			chatReq.Header.Set("Content-Type", "application/json")
 
@@ -516,14 +522,11 @@ func TestRequestSerialization(t *testing.T) {
 
 // TestModelEndpoint tests the /v1/models endpoint
 func TestModelEndpoint(t *testing.T) {
-	srv := server.NewServer()
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
 
 	token := "model-test"
 
 	// Test listing models
-	req, _ := http.NewRequest("GET", ts.URL+"/v1/models", nil)
+	req, _ := http.NewRequest("GET", serverURL+"/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -548,7 +551,7 @@ func TestModelEndpoint(t *testing.T) {
 
 	// Test getting specific model
 	modelID := "gpt-4"
-	req2, _ := http.NewRequest("GET", ts.URL+"/v1/models/"+modelID, nil)
+	req2, _ := http.NewRequest("GET", serverURL+"/v1/models/"+modelID, nil)
 	req2.Header.Set("Authorization", "Bearer "+token)
 
 	resp2, err := http.DefaultClient.Do(req2)
@@ -569,9 +572,6 @@ func TestModelEndpoint(t *testing.T) {
 
 // TestErrorResponses tests error response formats
 func TestErrorResponses(t *testing.T) {
-	srv := server.NewServer()
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
 
 	testCases := []struct {
 		name           string
@@ -613,7 +613,7 @@ func TestErrorResponses(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req, _ := http.NewRequest(tc.method, ts.URL+tc.path, bytes.NewReader(tc.body))
+			req, _ := http.NewRequest(tc.method, serverURL+tc.path, bytes.NewReader(tc.body))
 			if tc.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tc.token)
 			}
