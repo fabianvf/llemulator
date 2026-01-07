@@ -155,7 +155,7 @@ describe('OpenAI Emulator - Simple Format Tests', () => {
     });
     
     it('should work for both streaming and non-streaming', async () => {
-      await withResponses(['Same content for both'], async () => {
+      await withResponses(['Same content for both', 'Same content for both'], async () => {
         // Non-streaming
         const completion = await openai.chat.completions.create({
           model: 'gpt-4',
@@ -216,8 +216,7 @@ describe('OpenAI Emulator - Simple Format Tests', () => {
     it('should handle mixed sequential and pattern responses', async () => {
       await withResponses([
         'Default first response',
-        { match: 'help', response: 'How can I help?' },
-        { match: 'error', error: 'Something went wrong', status: 500 },
+        { pattern: '.*help.*', response: 'How can I help?', times: 1 },
       ], async () => {
         // First request gets default
         let completion = await openai.chat.completions.create({
@@ -294,14 +293,7 @@ describe('OpenAI Emulator - Simple Format Tests', () => {
 describe('OpenAI Emulator - Text Completion', () => {
   describe('Responses API', () => {
     it('should handle text completion', async () => {
-      await withRules([{
-        match: { method: 'POST', path: '/v1/responses' },
-        times: 10,
-        response: {
-          status: 200,
-          content: 'This is a test response.',
-        },
-      }], async () => {
+      await withResponses(['This is a test response.'], async () => {
         const response = await fetch(`${EMULATOR_URL}/v1/responses`, {
           method: 'POST',
           headers: {
@@ -322,14 +314,7 @@ describe('OpenAI Emulator - Text Completion', () => {
     });
     
     it('should handle text completion streaming', async () => {
-      await withRules([{
-        match: { method: 'POST', path: '/v1/responses' },
-        times: 10,
-        response: {
-          status: 200,
-          content: 'Streaming works!',
-        },
-      }], async () => {
+      await withResponses(['Streaming works!'], async () => {
         const response = await fetch(`${EMULATOR_URL}/v1/responses`, {
           method: 'POST',
           headers: {
@@ -389,75 +374,34 @@ describe('OpenAI Emulator - Models & Errors', () => {
   
   describe('Models API', () => {
     it('should list models', async () => {
-      await withRules([{
-        match: { method: 'GET', path: '/v1/models' },
-        times: 1,
-        response: {
-          status: 200,
-          json: {
-            object: 'list',
-            data: [
-              { id: 'gpt-4', object: 'model', created: 1687882410, owned_by: 'openai' },
-              { id: 'gpt-3.5-turbo', object: 'model', created: 1687882410, owned_by: 'openai' },
-            ],
-          },
-        },
-      }], async () => {
-        const models = await openai.models.list();
-        assert.equal(models.data.length, 2);
-        assert.equal(models.data[0].id, 'gpt-4');
-        assert.equal(models.data[1].id, 'gpt-3.5-turbo');
-      });
+      // Models API doesn't need scripts - it's built-in
+      const models = await openai.models.list();
+      assert(models.data.length > 0);
+      assert(models.data.some(m => m.id === 'gpt-4'));
     });
     
     it('should retrieve a model', async () => {
-      await withRules([{
-        match: { method: 'GET', path: '/v1/models/gpt-4' },
-        times: 1,
-        response: {
-          status: 200,
-          content: 'gpt-4',
-        },
-      }], async () => {
-        const model = await openai.models.retrieve('gpt-4');
-        assert.equal(model.id, 'gpt-4');
-        assert.equal(model.object, 'model');
-      });
+      // Models API doesn't need scripts - it's built-in
+      const model = await openai.models.retrieve('gpt-4');
+      assert.equal(model.id, 'gpt-4');
+      assert.equal(model.object, 'model');
     });
   });
   
   describe('Error Handling', () => {
     it('should handle invalid model error', async () => {
-      await withRules([{
-        match: {
-          method: 'POST',
-          path: '/v1/chat/completions',
-          json: { model: 'invalid-model' }
-        },
-        times: 1,
-        response: {
-          status: 404,
-          json: {
-            error: {
-              message: 'The model `invalid-model` does not exist',
-              type: 'invalid_request_error',
-              param: 'model',
-              code: 'model_not_found',
-            },
-          },
-        },
-      }], async () => {
-        try {
-          await openai.chat.completions.create({
-            model: 'invalid-model',
-            messages: [{ role: 'user', content: 'Test' }],
-          });
-          assert.fail('Should have thrown an error');
-        } catch (error) {
-          assert(error);
-          assert(error.status === 404 || error.status === 400);
-        }
-      });
+      // Model validation is automatic - no script needed
+      try {
+        await openai.chat.completions.create({
+          model: 'invalid-model',
+          messages: [{ role: 'user', content: 'Test' }],
+        });
+        assert.fail('Should have thrown an error');
+      } catch (error) {
+        assert(error);
+        assert(error.status === 404, `Expected status 404, got ${error.status}`);
+        assert(error.error?.type === 'invalid_request_error');
+      }
     });
     
     it('should handle missing authorization', async () => {

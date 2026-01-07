@@ -200,8 +200,7 @@ class TestMixedFormat:
     
     @load_responses([
         "Default first response",
-        {"match": "help", "response": "How can I help?"},
-        {"match": "error", "error": "Something went wrong", "status": 500},
+        {"pattern": ".*help.*", "response": "How can I help?", "times": 1},
     ])
     def test_mixed_responses(self, client):
         """Mix of sequential and pattern-based responses."""
@@ -223,14 +222,7 @@ class TestMixedFormat:
 class TestCompletionEndpoint:
     """Test text completion endpoint with simple format."""
     
-    @load_rules([{
-        "match": {"method": "POST", "path": "/v1/responses"},
-        "times": 10,
-        "response": {
-            "status": 200,
-            "content": "This is a test response.",
-        },
-    }])
+    @load_responses(["This is a test response."])
     def test_text_completion(self):
         """Text completion with auto-wrapping."""
         response = httpx.post(
@@ -250,14 +242,7 @@ class TestCompletionEndpoint:
         data = response.json()
         assert data['choices'][0]['text'] == "This is a test response."
     
-    @load_rules([{
-        "match": {"method": "POST", "path": "/v1/responses"},
-        "times": 10,
-        "response": {
-            "status": 200,
-            "content": "Streaming works too!",
-        },
-    }])
+    @load_responses(["Streaming works too!"])
     def test_text_completion_streaming(self):
         """Text completion streaming with auto-wrapping."""
         with httpx.stream(
@@ -346,37 +331,18 @@ class TestAPIConformance:
 class TestModelsAPI:
     """Models API still needs traditional format."""
     
-    @load_rules([{
-        "match": {"method": "GET", "path": "/v1/models"},
-        "times": 1,
-        "response": {
-            "status": 200,
-            "json": {
-                "object": "list",
-                "data": [
-                    {"id": "gpt-4", "object": "model", "created": 1687882410, "owned_by": "openai"},
-                    {"id": "gpt-3.5-turbo", "object": "model", "created": 1687882410, "owned_by": "openai"},
-                ],
-            },
-        },
-    }])
     def test_list_models(self, client):
         """List available models."""
+        # Models API is built-in, no script needed
         models = client.models.list()
-        assert len(models.data) == 2
-        assert models.data[0].id == 'gpt-4'
-        assert models.data[1].id == 'gpt-3.5-turbo'
+        assert len(models.data) > 0
+        # Check that gpt-4 is in the list
+        model_ids = [m.id for m in models.data]
+        assert 'gpt-4' in model_ids
     
-    @load_rules([{
-        "match": {"method": "GET", "path": "/v1/models/gpt-4"},
-        "times": 1,
-        "response": {
-            "status": 200,
-            "content": "gpt-4",
-        },
-    }])
     def test_retrieve_model(self, client):
         """Retrieve specific model."""
+        # Models API is built-in, no script needed
         model = client.models.retrieve('gpt-4')
         assert model.id == 'gpt-4'
         assert model.object == 'model'
@@ -385,27 +351,9 @@ class TestModelsAPI:
 class TestErrorHandling:
     """Error handling tests."""
     
-    @load_rules([{
-        "match": {
-            "method": "POST",
-            "path": "/v1/chat/completions",
-            "json": {"model": "invalid-model"}
-        },
-        "times": 1,
-        "response": {
-            "status": 404,
-            "json": {
-                "error": {
-                    "message": "The model `invalid-model` does not exist",
-                    "type": "invalid_request_error",
-                    "param": "model",
-                    "code": "model_not_found",
-                },
-            },
-        },
-    }])
     def test_invalid_model(self, client):
         """Test error for invalid model."""
+        # Model validation is automatic - no script needed
         with pytest.raises(Exception) as exc_info:
             client.chat.completions.create(
                 model='invalid-model',
