@@ -19,6 +19,7 @@ type Script struct {
 	Reset     bool        `json:"reset"`
 	Rules     []Rule      `json:"rules,omitempty"`     // Explicit rules
 	Responses interface{} `json:"responses,omitempty"` // Simplified format (array or map)
+	Models    []string    `json:"models,omitempty"`    // Custom model list
 }
 
 // Engine handles script execution with minimal complexity
@@ -29,8 +30,9 @@ type Engine struct {
 
 // Session holds rules for a token
 type Session struct {
-	mu    sync.Mutex
-	rules []Rule
+	mu     sync.Mutex
+	rules  []Rule
+	models []string // Custom models for this session
 }
 
 // NewEngine creates a new engine
@@ -63,12 +65,16 @@ func (e *Engine) LoadScript(token string, script Script) error {
 	session, exists := e.sessions[token]
 	if !exists || script.Reset {
 		session = &Session{
-			rules: rules,
+			rules:  rules,
+			models: script.Models,
 		}
 		e.sessions[token] = session
 	} else {
 		// Append rules without reset
 		session.rules = append(session.rules, rules...)
+		if len(script.Models) > 0 {
+			session.models = script.Models
+		}
 	}
 	
 	return nil
@@ -112,6 +118,39 @@ func (e *Engine) Reset(token string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.sessions, token)
+}
+
+// GetModels returns the list of valid models for a token
+func (e *Engine) GetModels(token string) []string {
+	// Check if session has custom models
+	e.mu.RLock()
+	session, exists := e.sessions[token]
+	e.mu.RUnlock()
+	
+	if exists && len(session.models) > 0 {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return session.models
+	}
+	
+	// Return default models
+	return []string{
+		"gpt-4", "gpt-4-turbo", "gpt-4-turbo-preview",
+		"gpt-3.5-turbo", "gpt-3.5-turbo-16k",
+		"text-davinci-003", "text-davinci-002",
+		"text-embedding-ada-002",
+	}
+}
+
+// ValidateModel checks if a model is valid for the given token
+func (e *Engine) ValidateModel(token string, model string) bool {
+	models := e.GetModels(token)
+	for _, m := range models {
+		if m == model {
+			return true
+		}
+	}
+	return false
 }
 
 // processResponses converts simplified formats to rules

@@ -137,6 +137,12 @@ func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Handle models endpoints separately (they are GET requests without body)
+	if strings.Contains(r.URL.Path, "/models") {
+		s.writeModelResponse(w, r.URL.Path, token)
+		return
+	}
+	
 	body, err := readRequestBody(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Failed to read request body", "invalid_request_error", nil, nil)
@@ -145,13 +151,31 @@ func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
 	
 	s.logDebug(r, token, body)
 	
+	// Validate JSON and model for non-GET requests
+	if r.Method != "GET" && len(body) > 0 {
+		var requestData map[string]interface{}
+		if err := json.Unmarshal(body, &requestData); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON", "invalid_request_error", nil, nil)
+			return
+		}
+		
+		// Validate model if present
+		if model, hasModel := requestData["model"].(string); hasModel {
+			if !s.engine.ValidateModel(token, model) {
+				modelParam := "model"
+				writeError(w, http.StatusNotFound, fmt.Sprintf("The model `%s` does not exist", model), "invalid_request_error", &modelParam, nil)
+				return
+			}
+		}
+	}
+	
 	// Extract user message from request
 	message := script.ExtractUserMessage(body)
 	
 	// Get response content from engine
 	responseContent, err := s.engine.MatchRequest(token, message)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("No matching rule: %v", err), "invalid_request_error", nil, nil)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("No matching rule: %v", err), "server_error", nil, nil)
 		return
 	}
 	
@@ -195,9 +219,6 @@ func (s *Server) writeFormattedResponse(w http.ResponseWriter, path string, requ
 		} else {
 			s.writeCompletion(w, content, req, http.StatusOK)
 		}
-	} else if strings.Contains(path, "/models") {
-		// For models endpoint, just return a simple model response
-		s.writeModelResponse(w, path)
 	} else {
 		// Default: return as plain text
 		w.WriteHeader(http.StatusOK)
@@ -219,22 +240,31 @@ func generateID(prefix string) string {
 	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(b))
 }
 
-func (s *Server) writeModelResponse(w http.ResponseWriter, path string) {
-	// Simple model response for /v1/models endpoint
-	if strings.HasSuffix(path, "/gpt-4") {
-		model := models.Model{
-			ID:      "gpt-4",
-			Object:  "model",
-			Created: time.Now().Unix(),
-			OwnedBy: "openai",
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(model)
-	} else if strings.Contains(path, "/models/") {
+func (s *Server) writeModelResponse(w http.ResponseWriter, path string, token string) {
+	// Get valid models for this token
+	validModels := s.engine.GetModels(token)
+	
+	// Handle specific model retrieval
+	if strings.Contains(path, "/models/") && !strings.HasSuffix(path, "/models") {
 		// Extract model ID from path
 		parts := strings.Split(path, "/")
 		modelID := parts[len(parts)-1]
+		
+		// Check if model is valid
+		isValid := false
+		for _, m := range validModels {
+			if m == modelID {
+				isValid = true
+				break
+			}
+		}
+		
+		if !isValid {
+			modelParam := "model"
+			writeError(w, http.StatusNotFound, fmt.Sprintf("The model `%s` does not exist", modelID), "invalid_request_error", &modelParam, nil)
+			return
+		}
+		
 		model := models.Model{
 			ID:      modelID,
 			Object:  "model",
@@ -246,12 +276,19 @@ func (s *Server) writeModelResponse(w http.ResponseWriter, path string) {
 		json.NewEncoder(w).Encode(model)
 	} else {
 		// List all models
+		var modelList []models.Model
+		for _, modelID := range validModels {
+			modelList = append(modelList, models.Model{
+				ID:      modelID,
+				Object:  "model",
+				Created: time.Now().Unix(),
+				OwnedBy: "openai",
+			})
+		}
+		
 		list := models.ModelList{
 			Object: "list",
-			Data: []models.Model{
-				{ID: "gpt-4", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
-				{ID: "gpt-3.5-turbo", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
-			},
+			Data:   modelList,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -460,7 +497,8 @@ func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, re
 	flusher.Flush()
 }
 
-func (s *Server) Run(port string) error {
+// setupRoutes creates the router with all handlers
+func (s *Server) setupRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 	
 	mux.HandleFunc("/healthz", s.HandleHealthz)
@@ -472,6 +510,15 @@ func (s *Server) Run(port string) error {
 	
 	mux.HandleFunc("/v1/", s.HandleOpenAIRequest)
 	
+	return mux
+}
+
+// ServeHTTP implements http.Handler
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.setupRoutes().ServeHTTP(w, r)
+}
+
+func (s *Server) Run(port string) error {
 	fmt.Printf("Starting server on port %s\n", port)
-	return http.ListenAndServe(":"+port, mux)
+	return http.ListenAndServe(":"+port, s.setupRoutes())
 }
