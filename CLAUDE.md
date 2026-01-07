@@ -14,14 +14,14 @@ This is an OpenAI API emulator designed for testing and CI/CD pipelines. It prov
 ### Core Components
 
 1. **Script Engine** (`internal/script/`)
-   - Request matching based on method, path, and JSON fields
-   - Rule-based response selection with counter support
+   - Pattern matching on message content
+   - Sequential and regex-based response selection
    - Per-token isolation for concurrent test execution
 
 2. **Session Management** (`internal/session/`)
    - Token-scoped state isolation
    - Per-token mutex to prevent request interleaving
-   - Script rule storage and counter management
+   - Response rules and custom models storage
 
 3. **Server** (`internal/server/`)
    - HTTP routing for OpenAI API endpoints
@@ -89,59 +89,95 @@ helm install openai-emulator ./charts/openai-emulator
 - `GET /healthz` - Liveness probe
 - `GET /readyz` - Readiness probe
 
+## Quick Start Example
+
+```bash
+# Start the emulator
+./openai-emulator
+
+# Load a simple response
+curl -X POST http://localhost:8080/_emulator/script \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{"reset": true, "responses": "Hello from the emulator!"}'
+
+# Use with OpenAI SDK
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Say hello"}]
+  }'
+```
+
 ## Script Format
 
-Scripts are loaded via `POST /_emulator/script` with Bearer token auth:
+The emulator uses a "send text, get text back" approach. Scripts are loaded via `POST /_emulator/script` with Bearer token auth:
+
+### Single Response
 
 ```json
 {
   "reset": true,
-  "rules": [
-    {
-      "match": {
-        "method": "POST",
-        "path": "/v1/chat/completions",
-        "json": {"model": "gpt-4"}
-      },
-      "times": 1,
-      "response": {
-        "status": 200,
-        "json": {
-          "id": "chatcmpl-123",
-          "object": "chat.completion",
-          "model": "gpt-4",
-          "choices": [{
-            "index": 0,
-            "message": {
-              "role": "assistant",
-              "content": "Hello!"
-            },
-            "finish_reason": "stop"
-          }]
-        }
-      }
-    },
-    {
-      "match": {
-        "method": "POST",
-        "path": "/v1/chat/completions",
-        "json": {"stream": true}
-      },
-      "times": 1,
-      "response": {
-        "status": 200,
-        "sse": [
-          {"data": {"id": "chatcmpl-123", "object": "chat.completion.chunk", "model": "gpt-4", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]}},
-          {"data": {"id": "chatcmpl-123", "object": "chat.completion.chunk", "model": "gpt-4", "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]}},
-          {"data": {"id": "chatcmpl-123", "object": "chat.completion.chunk", "model": "gpt-4", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}},
-          {"data": "[DONE]"}
-        ]
-      }
-    }
-  ],
-  "defaults": {
-    "on_unmatched": "error"
+  "responses": "This response will be returned for any request"
+}
+```
+
+### Sequential Responses
+
+Responses are returned in order, one per request:
+
+```json
+{
+  "reset": true,
+  "responses": [
+    "First response",
+    "Second response",
+    "Third response"
+  ]
+}
+```
+
+### Pattern-Based Responses
+
+Use regex patterns to match specific message content:
+
+```json
+{
+  "reset": true,
+  "responses": {
+    ".*hello.*": "Hi there!",
+    ".*weather.*": "It's sunny!",
+    ".*help.*": "How can I help you?"
   }
+}
+```
+
+### Mixed Format
+
+Combine sequential and pattern-based responses:
+
+```json
+{
+  "reset": true,
+  "responses": [
+    "Default first response",
+    {"pattern": ".*help.*", "response": "I can help!", "times": 2},
+    "Default second response"
+  ]
+}
+```
+
+### Custom Models
+
+Specify custom valid models (replaces default set):
+
+```json
+{
+  "reset": true,
+  "models": ["gpt-4", "claude-3", "custom-model"],
+  "responses": "Test response"
 }
 ```
 
@@ -176,10 +212,9 @@ go test -cover ./...
 
 ### Adding a New Endpoint
 1. Define response types in `internal/models/`
-2. Add route in `internal/server/routes.go`
-3. Implement handler in `internal/server/handlers.go`
+2. Add route in `internal/server/server.go` (setupRoutes function)
+3. Implement handler in `internal/server/server.go`
 4. Add conformance test in both JS and Python suites
-5. Update script matching if needed
 
 ### Debugging Streaming Issues
 - Check SSE event format: `data: <json>\n\n`
@@ -195,17 +230,18 @@ go test -cover ./...
 
 ### Session Debugging
 When `DEBUG=true`, use `GET /_emulator/state` to inspect:
-- Remaining rule counters
-- Last matched rules
 - Current session state
+- Loaded responses and their usage counts
+- Custom models if configured
 
 ## Important Implementation Notes
 
 1. **Streaming Must Flush**: After writing each SSE event, call `Flush()` on the response writer
 2. **Token Isolation**: Every token gets its own mutex - serialize requests per token
-3. **Rule Matching**: First match wins, then decrement counter
+3. **Response Matching**: Pattern-based responses use regex, sequential responses are consumed in order
 4. **Error Format**: Must match OpenAI error envelope for SDK exception handling
-5. **Model List Calls**: SDKs may call `/v1/models` automatically - handle extra calls gracefully
+5. **Model Validation**: Invalid models return automatic 404 errors without consuming responses
+6. **Default Models**: If no custom models specified, defaults include gpt-4, gpt-3.5-turbo, etc.
 
 ## Environment Variables
 
@@ -227,9 +263,9 @@ When `DEBUG=true`, use `GET /_emulator/state` to inspect:
 - Test with curl to isolate SDK issues
 
 ### Script Not Matching
-- Enable DEBUG mode and check `/_emulator/state`
-- Verify JSON subset matching logic
-- Check rule ordering (first match wins)
+- Check if responses are exhausted (each response is used once)
+- Verify regex patterns are correct (uses Go regex syntax)
+- Sequential responses must be loaded in the order they'll be requested
 - Ensure token is consistent across calls
 
 ## Performance Considerations

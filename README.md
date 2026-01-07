@@ -5,10 +5,11 @@ A deterministic OpenAI API emulator for testing and CI/CD pipelines. Provides sc
 ## Features
 
 - **Full SDK Compatibility**: Works with official OpenAI Python and JavaScript SDKs
+- **Simple API**: Just send text, get text back - no complex matching rules
 - **Deterministic Responses**: Script exact responses for reproducible testing
 - **Streaming Support**: Full SSE streaming for chat completions and responses
 - **Session Isolation**: Token-based session management for concurrent tests
-- **Request Matching**: Flexible rule-based request matching with JSON subset matching
+- **Pattern Matching**: Optional regex patterns for dynamic responses
 - **Kubernetes Ready**: Health checks, Docker support, and K8s manifests included
 
 ## Quick Start
@@ -102,35 +103,41 @@ const response = await openai.chat.completions.create({
 
 Load scripts via `POST /_emulator/script`:
 
+### Simple Response
+```bash
+curl -X POST http://localhost:8080/_emulator/script \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{"reset": true, "responses": "Hello from the emulator!"}'
+```
+
+### Multiple Responses
 ```bash
 curl -X POST http://localhost:8080/_emulator/script \
   -H "Authorization: Bearer test-token" \
   -H "Content-Type: application/json" \
   -d '{
     "reset": true,
-    "rules": [
-      {
-        "match": {
-          "method": "POST",
-          "path": "/v1/chat/completions",
-          "json": {"model": "gpt-4"}
-        },
-        "times": 1,
-        "response": {
-          "status": 200,
-          "json": {
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "choices": [{
-              "message": {
-                "role": "assistant",
-                "content": "Hello from emulator!"
-              }
-            }]
-          }
-        }
-      }
+    "responses": [
+      "First response",
+      "Second response",
+      "Third response"
     ]
+  }'
+```
+
+### Pattern-Based Responses
+```bash
+curl -X POST http://localhost:8080/_emulator/script \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset": true,
+    "responses": {
+      ".*hello.*": "Hi there!",
+      ".*help.*": "How can I help you?",
+      ".*weather.*": "It's sunny today!"
+    }
   }'
 ```
 
@@ -158,9 +165,10 @@ See [CLAUDE.md](CLAUDE.md) for detailed development documentation.
 
 This emulator prioritizes:
 1. **SDK Compatibility**: Real OpenAI SDKs must work without modification
-2. **Deterministic Behavior**: Scripted responses for reproducible tests
-3. **Streaming Fidelity**: Accurate SSE streaming implementation
-4. **Simplicity**: No actual LLM inference, just scripted responses
+2. **Simplicity**: Send text, get text back - no complex configuration
+3. **Deterministic Behavior**: Scripted responses for reproducible tests
+4. **Streaming Fidelity**: Accurate SSE streaming implementation
+5. **Automatic Error Handling**: Invalid models return proper OpenAI errors
 
 ## License
 
