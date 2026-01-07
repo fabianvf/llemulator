@@ -2,6 +2,7 @@ package script
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -254,62 +255,46 @@ func TestRuleCounters(t *testing.T) {
 	}
 }
 
-// TestDefaultBehavior verifies unmatched requests handled correctly
-func TestDefaultBehavior(t *testing.T) {
+// TestUnmatchedBehavior verifies unmatched requests always error
+func TestUnmatchedBehavior(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
 	
-	testCases := []struct {
-		name        string
-		onUnmatched string
-		shouldError bool
-	}{
-		{"Error on unmatched", "error", true},
-		{"Default response", "default", false},
-		{"Pass through", "pass", false},
+	script := Script{
+		Reset: true,
+		Rules: []Rule{
+			{
+				Match: MatchRule{
+					Method: "POST",
+					Path:   "/v1/specific",
+				},
+				Times: 1,
+				Response: ResponseRule{
+					Status:  200,
+					Content: "Specific response",
+				},
+			},
+		},
 	}
 	
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			script := Script{
-				Reset: true,
-				Rules: []Rule{
-					{
-						Match: MatchRule{
-							Method: "POST",
-							Path:   "/v1/specific",
-						},
-						Times: 1,
-						Response: ResponseRule{
-							Status:  200,
-							Content: "Specific response",
-						},
-					},
-				},
-				Defaults: DefaultSettings{
-					OnUnmatched: tc.onUnmatched,
-				},
-			}
-			
-			if err := engine.LoadScript(token, script); err != nil {
-				t.Fatalf("Failed to load script: %v", err)
-			}
-			
-			// Request that doesn't match any rule
-			body := []byte(`{"test": "unmatched"}`)
-			response, err := engine.MatchRequest(token, "POST", "/v1/unmatched", body)
-			
-			if tc.shouldError {
-				if err == nil {
-					t.Error("Expected error for unmatched request")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Unexpected error: %v", err)
-				}
-				// Could check for default response content
-			}
-		})
+	if err := engine.LoadScript(token, script); err != nil {
+		t.Fatalf("Failed to load script: %v", err)
+	}
+	
+	// Request that doesn't match any rule should always error
+	body := []byte(`{"test": "unmatched"}`)
+	response, err := engine.MatchRequest(token, "POST", "/v1/unmatched", body)
+	
+	if err == nil {
+		t.Error("Expected error for unmatched request")
+	}
+	if response != nil {
+		t.Error("Expected no response for unmatched request")
+	}
+	
+	// Error message should be helpful
+	if err != nil && !strings.Contains(err.Error(), "no matching rule") {
+		t.Errorf("Error message not helpful: %v", err)
 	}
 }
 

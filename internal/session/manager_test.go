@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -150,28 +151,33 @@ func TestMultipleTokensConcurrent(t *testing.T) {
 	}
 }
 
-// TestSessionExpiry tests that old sessions can be cleaned up
-func TestSessionExpiry(t *testing.T) {
-	manager := NewManagerWithExpiry(1 * time.Second)
+// TestSessionCleanup tests that sessions can be manually cleaned up
+func TestSessionCleanup(t *testing.T) {
+	manager := NewManager()
 	
-	token := "expiry-token"
-	session := manager.GetOrCreateSession(token)
-	session.SetData("key", "value")
-	
-	// Verify session exists
-	if manager.GetSession(token) == nil {
-		t.Error("Session should exist initially")
+	// Create multiple sessions
+	tokens := []string{"token1", "token2", "token3"}
+	for _, token := range tokens {
+		session := manager.GetOrCreateSession(token)
+		session.SetData("key", "value")
 	}
 	
-	// Wait for expiry
-	time.Sleep(2 * time.Second)
+	// Verify all sessions exist
+	for _, token := range tokens {
+		if manager.GetSession(token) == nil {
+			t.Errorf("Session %s should exist", token)
+		}
+	}
 	
-	// Trigger cleanup
-	manager.CleanupExpired()
+	// Reset one session
+	manager.ResetSession("token2")
 	
-	// Verify session is removed
-	if manager.GetSession(token) != nil {
-		t.Error("Expired session should be removed")
+	// Verify token2 is gone but others remain
+	if manager.GetSession("token2") != nil {
+		t.Error("Reset session should be removed")
+	}
+	if manager.GetSession("token1") == nil || manager.GetSession("token3") == nil {
+		t.Error("Other sessions should still exist")
 	}
 }
 

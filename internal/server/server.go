@@ -102,7 +102,7 @@ func (s *Server) HandleReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	s.engine.ResetSession(token)
+	s.engine.Reset(token)
 	
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
@@ -120,14 +120,14 @@ func (s *Server) HandleState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	state, err := s.engine.GetState(token)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error(), "not_found", nil, nil)
-		return
+	// Simple debug response - we don't maintain detailed state anymore
+	debugInfo := map[string]interface{}{
+		"token": token,
+		"status": "active",
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(state)
+	json.NewEncoder(w).Encode(debugInfo)
 }
 
 func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
@@ -145,13 +145,18 @@ func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
 	
 	s.logDebug(r, token, body)
 	
-	response, err := s.engine.MatchRequest(token, r.Method, r.URL.Path, body)
+	// Extract user message from request
+	message := script.ExtractUserMessage(body)
+	
+	// Get response content from engine
+	responseContent, err := s.engine.MatchRequest(token, message)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("No matching rule: %v", err), "invalid_request_error", nil, nil)
 		return
 	}
 	
-	s.writeResponse(w, r.URL.Path, body, response)
+	// Write the response in appropriate format for the endpoint
+	s.writeFormattedResponse(w, r.URL.Path, body, responseContent)
 }
 
 func readRequestBody(r *http.Request) ([]byte, error) {
@@ -168,44 +173,35 @@ func (s *Server) logDebug(r *http.Request, token string, body []byte) {
 	}
 }
 
-func (s *Server) writeResponse(w http.ResponseWriter, path string, requestBody []byte, response *script.ResponseRule) {
-	// If content is provided, auto-wrap it based on endpoint
-	if response.Content != "" {
-		s.writeWrappedResponse(w, path, requestBody, response)
-		return
+func (s *Server) writeFormattedResponse(w http.ResponseWriter, path string, requestBody []byte, content string) {
+	// Parse request to check if streaming is requested
+	var req map[string]interface{}
+	json.Unmarshal(requestBody, &req)
+	isStreaming := false
+	if stream, ok := req["stream"].(bool); ok {
+		isStreaming = stream
 	}
 	
-	// Use explicit SSE if provided
-	if len(response.SSE) > 0 {
-		s.handleSSEResponse(w, response.SSE)
-		return
-	}
-	
-	// Use explicit JSON if provided
-	if len(response.JSON) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(response.Status)
-		w.Write(response.JSON)
-		return
-	}
-	
-	w.WriteHeader(response.Status)
-}
-
-// handleSSEResponse writes SSE events with proper formatting
-func (s *Server) handleSSEResponse(w http.ResponseWriter, events []script.SSEEvent) {
-	setSSEHeaders(w)
-	
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	
-	for _, event := range events {
-		writeSSEEvent(w, event)
-		flusher.Flush()
-		time.Sleep(10 * time.Millisecond) // Simulate streaming delay
+	// Format response based on endpoint
+	if strings.Contains(path, "/chat/completions") {
+		if isStreaming {
+			s.writeChatCompletionStream(w, content, req)
+		} else {
+			s.writeChatCompletion(w, content, req, http.StatusOK)
+		}
+	} else if strings.Contains(path, "/completions") || strings.Contains(path, "/responses") {
+		if isStreaming {
+			s.writeCompletionStream(w, content, req)
+		} else {
+			s.writeCompletion(w, content, req, http.StatusOK)
+		}
+	} else if strings.Contains(path, "/models") {
+		// For models endpoint, just return a simple model response
+		s.writeModelResponse(w, path)
+	} else {
+		// Default: return as plain text
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(content))
 	}
 }
 
@@ -216,14 +212,6 @@ func setSSEHeaders(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func writeSSEEvent(w http.ResponseWriter, event script.SSEEvent) {
-	var data string
-	if err := json.Unmarshal(event.Data, &data); err == nil && data == "[DONE]" {
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-	} else {
-		fmt.Fprintf(w, "data: %s\n\n", event.Data)
-	}
-}
 
 func generateID(prefix string) string {
 	b := make([]byte, 8)
@@ -231,35 +219,43 @@ func generateID(prefix string) string {
 	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(b))
 }
 
-func (s *Server) writeWrappedResponse(w http.ResponseWriter, path string, requestBody []byte, response *script.ResponseRule) {
-	// Parse request to check if streaming is requested
-	var req map[string]interface{}
-	json.Unmarshal(requestBody, &req)
-	isStreaming := false
-	if stream, ok := req["stream"].(bool); ok {
-		isStreaming = stream
-	}
-	
-	// Determine response format based on endpoint
-	if strings.HasPrefix(path, "/v1/chat/completions") {
-		if isStreaming {
-			s.writeChatCompletionStream(w, response.Content, req)
-		} else {
-			s.writeChatCompletion(w, response.Content, req, response.Status)
+func (s *Server) writeModelResponse(w http.ResponseWriter, path string) {
+	// Simple model response for /v1/models endpoint
+	if strings.HasSuffix(path, "/gpt-4") {
+		model := models.Model{
+			ID:      "gpt-4",
+			Object:  "model",
+			Created: time.Now().Unix(),
+			OwnedBy: "openai",
 		}
-	} else if strings.HasPrefix(path, "/v1/responses") || strings.HasPrefix(path, "/v1/completions") {
-		if isStreaming {
-			s.writeCompletionStream(w, response.Content, req)
-		} else {
-			s.writeCompletion(w, response.Content, req, response.Status)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(model)
+	} else if strings.Contains(path, "/models/") {
+		// Extract model ID from path
+		parts := strings.Split(path, "/")
+		modelID := parts[len(parts)-1]
+		model := models.Model{
+			ID:      modelID,
+			Object:  "model",
+			Created: time.Now().Unix(),
+			OwnedBy: "openai",
 		}
-	} else if strings.HasPrefix(path, "/v1/models") {
-		// For models endpoint, content is the model ID
-		s.writeModel(w, response.Content, response.Status)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(model)
 	} else {
-		// Default: return content as-is
-		w.WriteHeader(response.Status)
-		w.Write([]byte(response.Content))
+		// List all models
+		list := models.ModelList{
+			Object: "list",
+			Data: []models.Model{
+				{ID: "gpt-4", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
+				{ID: "gpt-3.5-turbo", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(list)
 	}
 }
 
@@ -286,7 +282,7 @@ func (s *Server) writeChatCompletion(w http.ResponseWriter, content string, req 
 		},
 		Usage: &models.Usage{
 			PromptTokens:     10,
-			CompletionTokens: len(content) / 4, // Rough estimate
+			CompletionTokens: len(content) / 4,
 			TotalTokens:      10 + len(content)/4,
 		},
 	}
@@ -294,6 +290,10 @@ func (s *Server) writeChatCompletion(w http.ResponseWriter, content string, req 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(completion)
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string, req map[string]interface{}) {
@@ -310,13 +310,12 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 	}
 	
 	id := generateID("chatcmpl")
-	timestamp := time.Now().Unix()
 	
 	// Send initial chunk with role
 	chunk := models.ChatCompletion{
 		ID:      id,
 		Object:  "chat.completion.chunk",
-		Created: timestamp,
+		Created: time.Now().Unix(),
 		Model:   model,
 		Choices: []models.ChatChoice{
 			{
@@ -333,13 +332,13 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 	flusher.Flush()
 	time.Sleep(10 * time.Millisecond)
 	
-	// Send content in chunks (simulate streaming)
+	// Send content in chunks
 	words := strings.Fields(content)
 	for i, word := range words {
 		chunk := models.ChatCompletion{
 			ID:      id,
 			Object:  "chat.completion.chunk",
-			Created: timestamp,
+			Created: time.Now().Unix(),
 			Model:   model,
 			Choices: []models.ChatChoice{
 				{
@@ -361,11 +360,11 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 		time.Sleep(10 * time.Millisecond)
 	}
 	
-	// Send final chunk
-	finalChunk := models.ChatCompletion{
+	// Send finish chunk
+	finishChunk := models.ChatCompletion{
 		ID:      id,
 		Object:  "chat.completion.chunk",
-		Created: timestamp,
+		Created: time.Now().Unix(),
 		Model:   model,
 		Choices: []models.ChatChoice{
 			{
@@ -376,14 +375,17 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 		},
 	}
 	
-	data, _ = json.Marshal(finalChunk)
+	data, _ = json.Marshal(finishChunk)
 	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+	
+	// Send [DONE]
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
 
 func (s *Server) writeCompletion(w http.ResponseWriter, content string, req map[string]interface{}, status int) {
-	model := "gpt-4"
+	model := "gpt-3.5-turbo-instruct"
 	if m, ok := req["model"].(string); ok {
 		model = m
 	}
@@ -397,14 +399,13 @@ func (s *Server) writeCompletion(w http.ResponseWriter, content string, req map[
 			{
 				Text:         content,
 				Index:        0,
-				Logprobs:     nil,
 				FinishReason: "stop",
 			},
 		},
 		Usage: &models.Usage{
-			PromptTokens:     5,
+			PromptTokens:     10,
 			CompletionTokens: len(content) / 4,
-			TotalTokens:      5 + len(content)/4,
+			TotalTokens:      10 + len(content)/4,
 		},
 	}
 	
@@ -414,7 +415,7 @@ func (s *Server) writeCompletion(w http.ResponseWriter, content string, req map[
 }
 
 func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, req map[string]interface{}) {
-	model := "gpt-4"
+	model := "gpt-3.5-turbo-instruct"
 	if m, ok := req["model"].(string); ok {
 		model = m
 	}
@@ -427,7 +428,6 @@ func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, re
 	}
 	
 	id := generateID("cmpl")
-	timestamp := time.Now().Unix()
 	
 	// Send content in chunks
 	words := strings.Fields(content)
@@ -435,7 +435,7 @@ func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, re
 		chunk := models.TextCompletion{
 			ID:      id,
 			Object:  "text_completion",
-			Created: timestamp,
+			Created: time.Now().Unix(),
 			Model:   model,
 			Choices: []models.ResponseChoice{
 				{
@@ -449,39 +449,15 @@ func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, re
 			chunk.Choices[0].Text += " "
 		}
 		
-		if i == len(words)-1 {
-			chunk.Choices[0].FinishReason = "stop"
-		}
-		
 		data, _ := json.Marshal(chunk)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 		time.Sleep(10 * time.Millisecond)
 	}
 	
+	// Send [DONE]
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
-}
-
-func (s *Server) writeModel(w http.ResponseWriter, modelID string, status int) {
-	if modelID == "" {
-		modelID = "gpt-4"
-	}
-	
-	model := models.Model{
-		ID:      modelID,
-		Object:  "model",
-		Created: time.Now().Unix(),
-		OwnedBy: "openai",
-	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(model)
-}
-
-func stringPtr(s string) *string {
-	return &s
 }
 
 func (s *Server) Run(port string) error {
