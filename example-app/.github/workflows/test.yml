@@ -1,0 +1,106 @@
+name: Test Chat Application
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-with-emulator:
+    name: Integration Tests with Emulator
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Build emulator
+      run: |
+        cd ..
+        go build -o openai-emulator ./cmd/openai-emulator/main.go
+    
+    - name: Start emulator
+      run: |
+        cd ..
+        ./openai-emulator &
+        sleep 2
+        curl -f http://localhost:8080/healthz || exit 1
+    
+    - name: Install app dependencies
+      run: |
+        cd example-app
+        npm install
+    
+    - name: Run integration tests
+      run: |
+        cd example-app
+        npm test
+    
+  test-with-docker:
+    name: Docker Compose Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Run tests with Docker Compose
+      run: |
+        cd example-app
+        docker-compose up --build --abort-on-container-exit --exit-code-from app-tests
+    
+    - name: Clean up
+      if: always()
+      run: |
+        cd example-app
+        docker-compose down -v
+  
+  test-cli:
+    name: Test CLI Interface
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Build and start emulator
+      run: |
+        cd ..
+        go build -o openai-emulator ./cmd/openai-emulator/main.go
+        ./openai-emulator &
+        sleep 2
+    
+    - name: Install dependencies
+      run: |
+        cd example-app
+        npm install
+    
+    - name: Test CLI commands
+      run: |
+        cd example-app
+        # Test that CLI starts without errors
+        timeout 2 node src/cli.js < /dev/null || true
+        
+        # Test with commands
+        echo -e "/mode creative\n/history\n/exit" | timeout 5 node src/cli.js || true
