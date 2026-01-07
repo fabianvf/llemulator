@@ -32,19 +32,19 @@ func extractToken(r *http.Request) string {
 	if auth == "" {
 		return ""
 	}
-	
+
 	parts := strings.Split(auth, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		return ""
 	}
-	
+
 	return parts[1]
 }
 
 func writeError(w http.ResponseWriter, status int, message, errorType string, param, code *string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	
+
 	errResp := models.ErrorResponse{
 		Error: models.ErrorDetail{
 			Message: message,
@@ -53,7 +53,7 @@ func writeError(w http.ResponseWriter, status int, message, errorType string, pa
 			Code:    code,
 		},
 	}
-	
+
 	json.NewEncoder(w).Encode(errResp)
 }
 
@@ -73,24 +73,24 @@ func (s *Server) HandleScript(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Missing or invalid authorization", "auth_error", nil, nil)
 		return
 	}
-	
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Failed to read request body", "invalid_request_error", nil, nil)
 		return
 	}
-	
+
 	var scriptReq script.Script
 	if err := json.Unmarshal(body, &scriptReq); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid JSON", "invalid_request_error", nil, nil)
 		return
 	}
-	
+
 	if err := s.engine.LoadScript(token, scriptReq); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error(), "server_error", nil, nil)
 		return
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "loaded"})
 }
@@ -101,9 +101,9 @@ func (s *Server) HandleReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Missing or invalid authorization", "auth_error", nil, nil)
 		return
 	}
-	
+
 	s.engine.Reset(token)
-	
+
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
 }
@@ -113,19 +113,19 @@ func (s *Server) HandleState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Debug mode not enabled", "forbidden", nil, nil)
 		return
 	}
-	
+
 	token := extractToken(r)
 	if token == "" {
 		writeError(w, http.StatusUnauthorized, "Missing or invalid authorization", "auth_error", nil, nil)
 		return
 	}
-	
+
 	// Simple debug response - we don't maintain detailed state anymore
 	debugInfo := map[string]interface{}{
-		"token": token,
+		"token":  token,
 		"status": "active",
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(debugInfo)
 }
@@ -136,21 +136,21 @@ func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Missing or invalid authorization", "auth_error", nil, nil)
 		return
 	}
-	
+
 	// Handle models endpoints separately (they are GET requests without body)
 	if strings.Contains(r.URL.Path, "/models") {
 		s.writeModelResponse(w, r.URL.Path, token)
 		return
 	}
-	
+
 	body, err := readRequestBody(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Failed to read request body", "invalid_request_error", nil, nil)
 		return
 	}
-	
+
 	s.logDebug(r, token, body)
-	
+
 	// Validate JSON and model for non-GET requests
 	if r.Method != "GET" && len(body) > 0 {
 		var requestData map[string]interface{}
@@ -158,7 +158,7 @@ func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Invalid JSON", "invalid_request_error", nil, nil)
 			return
 		}
-		
+
 		// Validate model if present
 		if model, hasModel := requestData["model"].(string); hasModel {
 			if !s.engine.ValidateModel(token, model) {
@@ -168,17 +168,17 @@ func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Extract user message from request
 	message := script.ExtractUserMessage(body)
-	
+
 	// Get response content from engine
 	responseContent, err := s.engine.MatchRequest(token, message)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("No matching rule: %v", err), "server_error", nil, nil)
 		return
 	}
-	
+
 	// Write the response in appropriate format for the endpoint
 	s.writeFormattedResponse(w, r.URL.Path, body, responseContent)
 }
@@ -205,7 +205,7 @@ func (s *Server) writeFormattedResponse(w http.ResponseWriter, path string, requ
 	if stream, ok := req["stream"].(bool); ok {
 		isStreaming = stream
 	}
-	
+
 	// Format response based on endpoint
 	if strings.Contains(path, "/chat/completions") {
 		if isStreaming {
@@ -233,7 +233,6 @@ func setSSEHeaders(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 }
 
-
 func generateID(prefix string) string {
 	b := make([]byte, 8)
 	rand.Read(b)
@@ -243,13 +242,13 @@ func generateID(prefix string) string {
 func (s *Server) writeModelResponse(w http.ResponseWriter, path string, token string) {
 	// Get valid models for this token
 	validModels := s.engine.GetModels(token)
-	
+
 	// Handle specific model retrieval
 	if strings.Contains(path, "/models/") && !strings.HasSuffix(path, "/models") {
 		// Extract model ID from path
 		parts := strings.Split(path, "/")
 		modelID := parts[len(parts)-1]
-		
+
 		// Check if model is valid
 		isValid := false
 		for _, m := range validModels {
@@ -258,13 +257,13 @@ func (s *Server) writeModelResponse(w http.ResponseWriter, path string, token st
 				break
 			}
 		}
-		
+
 		if !isValid {
 			modelParam := "model"
 			writeError(w, http.StatusNotFound, fmt.Sprintf("The model `%s` does not exist", modelID), "invalid_request_error", &modelParam, nil)
 			return
 		}
-		
+
 		model := models.Model{
 			ID:      modelID,
 			Object:  "model",
@@ -285,7 +284,7 @@ func (s *Server) writeModelResponse(w http.ResponseWriter, path string, token st
 				OwnedBy: "openai",
 			})
 		}
-		
+
 		list := models.ModelList{
 			Object: "list",
 			Data:   modelList,
@@ -301,7 +300,7 @@ func (s *Server) writeChatCompletion(w http.ResponseWriter, content string, req 
 	if m, ok := req["model"].(string); ok {
 		model = m
 	}
-	
+
 	completion := models.ChatCompletion{
 		ID:      generateID("chatcmpl"),
 		Object:  "chat.completion",
@@ -323,7 +322,7 @@ func (s *Server) writeChatCompletion(w http.ResponseWriter, content string, req 
 			TotalTokens:      10 + len(content)/4,
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(completion)
@@ -338,16 +337,16 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 	if m, ok := req["model"].(string); ok {
 		model = m
 	}
-	
+
 	setSSEHeaders(w)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
-	
+
 	id := generateID("chatcmpl")
-	
+
 	// Send initial chunk with role
 	chunk := models.ChatCompletion{
 		ID:      id,
@@ -363,12 +362,12 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 			},
 		},
 	}
-	
+
 	data, _ := json.Marshal(chunk)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
 	time.Sleep(10 * time.Millisecond)
-	
+
 	// Send content in chunks
 	words := strings.Fields(content)
 	for i, word := range words {
@@ -386,17 +385,17 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 				},
 			},
 		}
-		
+
 		if i < len(words)-1 {
 			chunk.Choices[0].Delta.Content += " "
 		}
-		
+
 		data, _ := json.Marshal(chunk)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 		time.Sleep(10 * time.Millisecond)
 	}
-	
+
 	// Send finish chunk
 	finishChunk := models.ChatCompletion{
 		ID:      id,
@@ -411,11 +410,11 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 			},
 		},
 	}
-	
+
 	data, _ = json.Marshal(finishChunk)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
-	
+
 	// Send [DONE]
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
@@ -426,7 +425,7 @@ func (s *Server) writeCompletion(w http.ResponseWriter, content string, req map[
 	if m, ok := req["model"].(string); ok {
 		model = m
 	}
-	
+
 	completion := models.TextCompletion{
 		ID:      generateID("cmpl"),
 		Object:  "text_completion",
@@ -445,7 +444,7 @@ func (s *Server) writeCompletion(w http.ResponseWriter, content string, req map[
 			TotalTokens:      10 + len(content)/4,
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(completion)
@@ -456,16 +455,16 @@ func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, re
 	if m, ok := req["model"].(string); ok {
 		model = m
 	}
-	
+
 	setSSEHeaders(w)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
-	
+
 	id := generateID("cmpl")
-	
+
 	// Send content in chunks
 	words := strings.Fields(content)
 	for i, word := range words {
@@ -481,17 +480,17 @@ func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, re
 				},
 			},
 		}
-		
+
 		if i < len(words)-1 {
 			chunk.Choices[0].Text += " "
 		}
-		
+
 		data, _ := json.Marshal(chunk)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 		time.Sleep(10 * time.Millisecond)
 	}
-	
+
 	// Send [DONE]
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
@@ -500,16 +499,16 @@ func (s *Server) writeCompletionStream(w http.ResponseWriter, content string, re
 // setupRoutes creates the router with all handlers
 func (s *Server) setupRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
-	
+
 	mux.HandleFunc("/healthz", s.HandleHealthz)
 	mux.HandleFunc("/readyz", s.HandleReadyz)
-	
+
 	mux.HandleFunc("POST /_emulator/script", s.HandleScript)
 	mux.HandleFunc("POST /_emulator/reset", s.HandleReset)
 	mux.HandleFunc("GET /_emulator/state", s.HandleState)
-	
+
 	mux.HandleFunc("/v1/", s.HandleOpenAIRequest)
-	
+
 	return mux
 }
 

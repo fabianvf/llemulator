@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod init:*)",
+      "Bash(mkdir:*)",
+      "Bash(go build:*)",
+      "Bash(curl:*)",
+      "Bash(npm install)",
+      "Bash(npm test)",
+      "Bash(./openai-emulator)",
+      "Bash(npm test:*)",
+      "Bash(pkill:*)",
+      "Bash(node:*)",
+      "Bash(python -m pytest test_conformance.py -v)",
+      "Bash(python -m pytest test_conformance.py -v --tb=short)",
+      "Bash(chmod:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(awk:*)",
+      "Bash(git add:*)",
+      "Bash(go test:*)",
+      "Bash(python -m pytest conformance/python -v)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

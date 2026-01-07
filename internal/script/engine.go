@@ -9,9 +9,9 @@ import (
 
 // Rule represents a simple matching rule
 type Rule struct {
-	Pattern  string `json:"pattern,omitempty"`  // Optional regex pattern
-	Response string `json:"response"`           // Response content
-	Times    int    `json:"times,omitempty"`    // How many times to match (-1 = unlimited, 0 = exhausted)
+	Pattern  string `json:"pattern,omitempty"` // Optional regex pattern
+	Response string `json:"response"`          // Response content
+	Times    int    `json:"times,omitempty"`   // How many times to match (-1 = unlimited, 0 = exhausted)
 }
 
 // Script represents a script configuration
@@ -48,7 +48,7 @@ func (e *Engine) LoadScript(token string, script Script) error {
 	defer e.mu.Unlock()
 
 	var rules []Rule
-	
+
 	// Process simplified response format
 	if script.Responses != nil {
 		processedRules, err := processResponses(script.Responses)
@@ -57,10 +57,10 @@ func (e *Engine) LoadScript(token string, script Script) error {
 		}
 		rules = append(rules, processedRules...)
 	}
-	
+
 	// Add explicit rules
 	rules = append(rules, script.Rules...)
-	
+
 	// Create or reset session
 	session, exists := e.sessions[token]
 	if !exists || script.Reset {
@@ -76,7 +76,7 @@ func (e *Engine) LoadScript(token string, script Script) error {
 			session.models = script.Models
 		}
 	}
-	
+
 	return nil
 }
 
@@ -85,21 +85,21 @@ func (e *Engine) MatchRequest(token string, message string) (string, error) {
 	e.mu.RLock()
 	session, exists := e.sessions[token]
 	e.mu.RUnlock()
-	
+
 	if !exists {
 		return "", fmt.Errorf("no script loaded for token")
 	}
-	
+
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	
+
 	// Try to match against rules
 	for i, rule := range session.rules {
 		// Skip exhausted rules
 		if rule.Times == 0 {
 			continue
 		}
-		
+
 		// Check if pattern matches (or no pattern = always match)
 		if rule.Pattern == "" || matchesPattern(rule.Pattern, message) {
 			// Decrement counter unless unlimited
@@ -109,7 +109,7 @@ func (e *Engine) MatchRequest(token string, message string) (string, error) {
 			return rule.Response, nil
 		}
 	}
-	
+
 	return "", fmt.Errorf("no matching rule for message: %s", message)
 }
 
@@ -126,13 +126,13 @@ func (e *Engine) GetModels(token string) []string {
 	e.mu.RLock()
 	session, exists := e.sessions[token]
 	e.mu.RUnlock()
-	
+
 	if exists && len(session.models) > 0 {
 		session.mu.Lock()
 		defer session.mu.Unlock()
 		return session.models
 	}
-	
+
 	// Return default models
 	return []string{
 		"gpt-4", "gpt-4-turbo", "gpt-4-turbo-preview",
@@ -156,7 +156,7 @@ func (e *Engine) ValidateModel(token string, model string) bool {
 // processResponses converts simplified formats to rules
 func processResponses(responses interface{}) ([]Rule, error) {
 	var rules []Rule
-	
+
 	switch v := responses.(type) {
 	case []interface{}:
 		// Sequential responses: ["response1", "response2", ...]
@@ -183,7 +183,7 @@ func processResponses(responses interface{}) ([]Rule, error) {
 				}
 			}
 		}
-		
+
 	case map[string]interface{}:
 		// Pattern-based: {"pattern": "response", ...}
 		for pattern, response := range v {
@@ -195,18 +195,18 @@ func processResponses(responses interface{}) ([]Rule, error) {
 				})
 			}
 		}
-		
+
 	case string:
 		// Single response
 		rules = append(rules, Rule{
 			Response: v,
 			Times:    1,
 		})
-		
+
 	default:
 		return nil, fmt.Errorf("unsupported response format")
 	}
-	
+
 	return rules, nil
 }
 
@@ -226,12 +226,12 @@ func ExtractUserMessage(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
-	
+
 	var data map[string]interface{}
 	if err := json.Unmarshal(body, &data); err != nil {
 		return ""
 	}
-	
+
 	// Try chat completion format
 	if messages, ok := data["messages"].([]interface{}); ok {
 		// Find last user message
@@ -245,16 +245,16 @@ func ExtractUserMessage(body []byte) string {
 			}
 		}
 	}
-	
+
 	// Try completion format
 	if prompt, ok := data["prompt"].(string); ok {
 		return prompt
 	}
-	
+
 	// Try direct input field
 	if input, ok := data["input"].(string); ok {
 		return input
 	}
-	
+
 	return ""
 }

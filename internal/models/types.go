@@ -1,15 +1,15 @@
 package models
 
 type Model struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	Created   int64  `json:"created"`
-	OwnedBy   string `json:"owned_by"`
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
 }
 
 type ModelList struct {
-	Object string   `json:"object"`
-	Data   []Model  `json:"data"`
+	Object string  `json:"object"`
+	Data   []Model `json:"data"`
 }
 
 type ChatMessage struct {
@@ -18,8 +18,8 @@ type ChatMessage struct {
 }
 
 type ChatCompletionRequest struct {
-	Model       string         `json:"model"`
-	Messages    []ChatMessage  `json:"messages"`
+	Model       string        `json:"model"`
+	Messages    []ChatMessage `json:"messages"`
 	MaxTokens   *int          `json:"max_tokens,omitempty"`
 	Temperature *float32      `json:"temperature,omitempty"`
 	Stream      bool          `json:"stream"`
@@ -48,10 +48,10 @@ type ChatCompletion struct {
 }
 
 type ResponseRequest struct {
-	Model     string   `json:"model"`
-	Prompt    string   `json:"prompt"`
-	MaxTokens *int     `json:"max_tokens,omitempty"`
-	Stream    bool     `json:"stream"`
+	Model     string `json:"model"`
+	Prompt    string `json:"prompt"`
+	MaxTokens *int   `json:"max_tokens,omitempty"`
+	Stream    bool   `json:"stream"`
 }
 
 type ResponseChoice struct {

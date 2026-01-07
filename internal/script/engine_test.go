@@ -17,16 +17,16 @@ func TestNewEngine(t *testing.T) {
 func TestSimpleStringResponse(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
-	
+
 	script := Script{
 		Reset:     true,
 		Responses: "Hello, world!",
 	}
-	
+
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
-	
+
 	// First request should match
 	response, err := engine.MatchRequest(token, "any message")
 	if err != nil {
@@ -35,7 +35,7 @@ func TestSimpleStringResponse(t *testing.T) {
 	if response != "Hello, world!" {
 		t.Errorf("Expected 'Hello, world!', got '%s'", response)
 	}
-	
+
 	// Second request should fail (rule exhausted)
 	_, err = engine.MatchRequest(token, "another message")
 	if err == nil {
@@ -47,16 +47,16 @@ func TestSimpleStringResponse(t *testing.T) {
 func TestSequentialResponses(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
-	
+
 	script := Script{
 		Reset:     true,
 		Responses: []interface{}{"First", "Second", "Third"},
 	}
-	
+
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
-	
+
 	// Test sequential matching
 	expected := []string{"First", "Second", "Third"}
 	for i, exp := range expected {
@@ -68,7 +68,7 @@ func TestSequentialResponses(t *testing.T) {
 			t.Errorf("Request %d: expected '%s', got '%s'", i, exp, response)
 		}
 	}
-	
+
 	// Fourth request should fail
 	_, err := engine.MatchRequest(token, "fourth message")
 	if err == nil {
@@ -80,21 +80,21 @@ func TestSequentialResponses(t *testing.T) {
 func TestPatternMatching(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
-	
+
 	script := Script{
 		Reset: true,
 		Responses: map[string]interface{}{
-			".*hello.*":         "Hi there!",
-			".*weather.*":       "It's sunny!",
+			".*hello.*":           "Hi there!",
+			".*weather.*":         "It's sunny!",
 			"\\d+\\s*\\+\\s*\\d+": "Math detected!",
-			"exact match":       "Exact response",
+			"exact match":         "Exact response",
 		},
 	}
-	
+
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
-	
+
 	testCases := []struct {
 		message  string
 		expected string
@@ -106,7 +106,7 @@ func TestPatternMatching(t *testing.T) {
 		{"exact match", "Exact response"},
 		{"no match", ""}, // Should error
 	}
-	
+
 	for _, tc := range testCases {
 		response, err := engine.MatchRequest(token, tc.message)
 		if tc.expected == "" {
@@ -128,7 +128,7 @@ func TestPatternMatching(t *testing.T) {
 func TestRuleCounters(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
-	
+
 	script := Script{
 		Reset: true,
 		Rules: []Rule{
@@ -144,11 +144,11 @@ func TestRuleCounters(t *testing.T) {
 			},
 		},
 	}
-	
+
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
-	
+
 	// First two should match limited rule
 	for i := 0; i < 2; i++ {
 		response, err := engine.MatchRequest(token, "test")
@@ -159,7 +159,7 @@ func TestRuleCounters(t *testing.T) {
 			t.Errorf("Request %d: expected limited response, got '%s'", i, response)
 		}
 	}
-	
+
 	// Subsequent requests should match unlimited rule
 	for i := 0; i < 5; i++ {
 		response, err := engine.MatchRequest(token, "test")
@@ -172,39 +172,39 @@ func TestRuleCounters(t *testing.T) {
 	}
 }
 
-// TestMixedFormat tests mixing sequential and pattern responses  
+// TestMixedFormat tests mixing sequential and pattern responses
 func TestMixedFormat(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
-	
+
 	script := Script{
 		Reset: true,
 		Responses: []interface{}{
 			"First default",
 			map[string]interface{}{
-				"pattern":  ".*help.*",  // Make it a proper regex pattern
+				"pattern":  ".*help.*", // Make it a proper regex pattern
 				"response": "Help response",
-				"times":    2.0,  // Ensure it's a float for proper JSON parsing
+				"times":    2.0, // Ensure it's a float for proper JSON parsing
 			},
 			"Second default",
 		},
 	}
-	
+
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
-	
+
 	// Rules are checked in order:
 	// 1. "First default" with no pattern (matches anything, times=1)
-	// 2. ".*help.*" pattern (times=2)  
+	// 2. ".*help.*" pattern (times=2)
 	// 3. "Second default" with no pattern (matches anything, times=1)
-	
+
 	// First request matches rule 1 (no pattern, matches anything)
 	response, _ := engine.MatchRequest(token, "anything")
 	if response != "First default" {
 		t.Errorf("Expected 'First default', got '%s'", response)
 	}
-	
+
 	// Now rule 1 is exhausted. "help" matches rule 2
 	response, err := engine.MatchRequest(token, "help me")
 	if err != nil {
@@ -213,7 +213,7 @@ func TestMixedFormat(t *testing.T) {
 	if response != "Help response" {
 		t.Errorf("Expected 'Help response', got '%s'", response)
 	}
-	
+
 	// Second help still matches rule 2 (has 1 use left)
 	response, err = engine.MatchRequest(token, "I need help")
 	if err != nil {
@@ -222,13 +222,13 @@ func TestMixedFormat(t *testing.T) {
 	if response != "Help response" {
 		t.Errorf("Expected 'Help response' again, got '%s'", response)
 	}
-	
+
 	// Rule 2 is now exhausted. Next request matches rule 3
 	response, _ = engine.MatchRequest(token, "other")
 	if response != "Second default" {
 		t.Errorf("Expected 'Second default', got '%s'", response)
 	}
-	
+
 	// All rules exhausted, should error
 	_, err = engine.MatchRequest(token, "final")
 	if err == nil {
@@ -240,47 +240,47 @@ func TestMixedFormat(t *testing.T) {
 func TestScriptReset(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
-	
+
 	// Load initial script
 	script1 := Script{
 		Reset:     true,
 		Responses: "First script",
 	}
-	
+
 	if err := engine.LoadScript(token, script1); err != nil {
 		t.Fatalf("Failed to load first script: %v", err)
 	}
-	
+
 	response, _ := engine.MatchRequest(token, "test")
 	if response != "First script" {
 		t.Errorf("First script not loaded correctly")
 	}
-	
+
 	// Load second script with reset
 	script2 := Script{
 		Reset:     true,
 		Responses: "Second script",
 	}
-	
+
 	if err := engine.LoadScript(token, script2); err != nil {
 		t.Fatalf("Failed to load second script: %v", err)
 	}
-	
+
 	response, _ = engine.MatchRequest(token, "test")
 	if response != "Second script" {
 		t.Errorf("Second script not loaded correctly")
 	}
-	
+
 	// Load third script without reset (should append)
 	script3 := Script{
 		Reset:     false,
 		Responses: "Third script",
 	}
-	
+
 	if err := engine.LoadScript(token, script3); err != nil {
 		t.Fatalf("Failed to load third script: %v", err)
 	}
-	
+
 	// Should still have second script rule
 	response, _ = engine.MatchRequest(token, "test")
 	if response != "Third script" {
@@ -291,7 +291,7 @@ func TestScriptReset(t *testing.T) {
 // TestTokenIsolation verifies different tokens don't interfere
 func TestTokenIsolation(t *testing.T) {
 	engine := NewEngine()
-	
+
 	// Load different scripts for different tokens
 	tokens := []string{"token1", "token2", "token3"}
 	for i, token := range tokens {
@@ -302,7 +302,7 @@ func TestTokenIsolation(t *testing.T) {
 		if err := engine.LoadScript(token, script); err != nil {
 			t.Fatalf("Failed to load script for %s: %v", token, err)
 		}
-		
+
 		// Verify immediately
 		response, err := engine.MatchRequest(token, "test")
 		if err != nil {
@@ -353,7 +353,7 @@ func TestExtractUserMessage(t *testing.T) {
 			expected: "",
 		},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := ExtractUserMessage([]byte(tc.body))
@@ -368,25 +368,25 @@ func TestExtractUserMessage(t *testing.T) {
 func TestNoMatchError(t *testing.T) {
 	engine := NewEngine()
 	token := "test-token"
-	
+
 	script := Script{
 		Reset:     true,
 		Responses: "Only response",
 	}
-	
+
 	if err := engine.LoadScript(token, script); err != nil {
 		t.Fatalf("Failed to load script: %v", err)
 	}
-	
+
 	// Use the response
 	engine.MatchRequest(token, "first")
-	
+
 	// Second should error with helpful message
 	_, err := engine.MatchRequest(token, "test message")
 	if err == nil {
 		t.Fatal("Expected error for unmatched message")
 	}
-	
+
 	if !strings.Contains(err.Error(), "test message") {
 		t.Errorf("Error should contain the message that failed to match: %v", err)
 	}

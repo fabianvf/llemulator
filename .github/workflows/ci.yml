@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-go:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Run Go tests
+      run: go test -v -race -coverprofile=coverage.out ./...
+    
+    - name: Build binary
+      run: go build -o openai-emulator cmd/openai-emulator/main.go
+
+  conformance-local:
+    name: Conformance Tests (Local)
+    runs-on: ubuntu-latest
+    needs: test-go
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Start emulator
+      run: |
+        go build -o openai-emulator cmd/openai-emulator/main.go
+        ./openai-emulator &
+        sleep 2
+    
+    - name: Run JS conformance tests
+      run: |
+        cd conformance/js
+        npm install
+        npm test
+    
+    - name: Run Python conformance tests
+      run: |
+        cd conformance/python
+        pip install -r requirements.txt
+        pytest -v
+
+  conformance-docker:
+    name: Conformance Tests (Docker)
+    runs-on: ubuntu-latest
+    needs: test-go
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Build Docker image
+      run: docker build -t openai-emulator .
+    
+    - name: Start Docker container
+      run: |
+        docker run -d --name emulator -p 8080:8080 openai-emulator
+        sleep 3
+    
+    - name: Run JS conformance tests
+      run: |
+        cd conformance/js
+        npm install
+        EMULATOR_URL=http://localhost:8080 npm test
+    
+    - name: Run Python conformance tests
+      run: |
+        cd conformance/python
+        pip install -r requirements.txt
+        EMULATOR_URL=http://localhost:8080 pytest -v
+    
+    - name: Stop container
+      if: always()
+      run: docker stop emulator && docker rm emulator
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m
