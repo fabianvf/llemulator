@@ -1,3 +1,6 @@
+# Claude local settings
+.claude/
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
