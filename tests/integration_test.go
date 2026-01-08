@@ -30,17 +30,24 @@ func TestMain(m *testing.M) {
 		srv := server.NewServer()
 		testServer = httptest.NewServer(srv)
 		serverURL = testServer.URL
-		defer testServer.Close()
 	}
 
 	// Run all tests
 	code := m.Run()
+
+	// Clean up embedded server if we created one
+	if testServer != nil {
+		testServer.Close()
+	}
+
 	os.Exit(code)
 }
 
 // TestEndToEndChatCompletion tests complete chat completion flow
 func TestEndToEndChatCompletion(t *testing.T) {
 	token := "integration-test"
+
+	t.Logf("Using server URL: %s", serverURL)
 
 	// Load script with simple response
 	scriptPayload := map[string]interface{}{
