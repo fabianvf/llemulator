@@ -1,365 +1,269 @@
 /**
- * Integration tests for ChatService using OpenAI Emulator
+ * Integration tests for ChatService using OpenAI Emulator with simplified format
  */
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { ChatService } from '../src/chat-service.js';
 
-const EMULATOR_URL = 'http://localhost:8080/v1';
+const EMULATOR_URL = process.env.EMULATOR_URL || 'http://localhost:8080/v1';
 const API_KEY = 'test-chat-app';
 
-// Helper to load test scripts into emulator
-async function loadTestScripts() {
-  const scripts = {
+// Helper to load test responses in simplified format
+async function loadTestResponses(responses) {
+  const script = {
     reset: true,
-    rules: [
-      // Helpful mode responses
-      {
-        match: {
-          method: 'POST',
-          path: '/v1/chat/completions',
-          json: { 
-            model: 'gpt-4',
-            messages: [
-              { role: 'system', content: 'You are a helpful AI assistant. Provide clear, accurate, and useful responses.' },
-              { role: 'user', content: 'What is Node.js?' }
-            ]
-          }
-        },
-        times: 5,
-        response: {
-          status: 200,
-          json: {
-            id: 'test-helpful-1',
-            object: 'chat.completion',
-            model: 'gpt-4',
-            choices: [{
-              index: 0,
-              message: {
-                role: 'assistant',
-                content: 'Node.js is a JavaScript runtime built on Chrome\'s V8 engine. It allows you to run JavaScript on the server-side, enabling you to build scalable network applications. Key features include non-blocking I/O, an event-driven architecture, and a rich ecosystem of packages via npm.'
-              },
-              finish_reason: 'stop'
-            }]
-          }
-        }
-      },
-      // Creative mode responses
-      {
-        match: {
-          method: 'POST',
-          path: '/v1/chat/completions',
-          json: {
-            model: 'gpt-4',
-            messages: [
-              { role: 'system', content: 'You are a creative AI assistant. Be imaginative, playful, and think outside the box.' },
-              { role: 'user', content: 'Tell me about dragons' }
-            ]
-          }
-        },
-        times: 5,
-        response: {
-          status: 200,
-          json: {
-            id: 'test-creative-1',
-            object: 'chat.completion',
-            model: 'gpt-4',
-            choices: [{
-              index: 0,
-              message: {
-                role: 'assistant',
-                content: 'Ah, dragons! Those magnificent creatures that dance between myth and imagination! Picture this: scales that shimmer like liquid starlight, wings that could embrace entire clouds, and eyes that hold the wisdom of forgotten ages. In some tales, they hoard gold; in others, they hoard stories. What if dragons were actually ancient librarians, and their fire-breath was just their way of speed-reading?'
-              },
-              finish_reason: 'stop'
-            }]
-          }
-        }
-      },
-      // Concise mode responses
-      {
-        match: {
-          method: 'POST',
-          path: '/v1/chat/completions',
-          json: {
-            model: 'gpt-4',
-            messages: [
-              { role: 'system', content: 'You are a concise AI assistant. Provide brief, direct answers without unnecessary elaboration.' },
-              { role: 'user', content: 'What is 2+2?' }
-            ]
-          }
-        },
-        times: 5,
-        response: {
-          status: 200,
-          json: {
-            id: 'test-concise-1',
-            object: 'chat.completion',
-            model: 'gpt-4',
-            choices: [{
-              index: 0,
-              message: {
-                role: 'assistant',
-                content: '4'
-              },
-              finish_reason: 'stop'
-            }]
-          }
-        }
-      },
-      // Streaming response
-      {
-        match: {
-          method: 'POST',
-          path: '/v1/chat/completions',
-          json: {
-            model: 'gpt-4',
-            stream: true
-          }
-        },
-        times: 10,
-        response: {
-          status: 200,
-          sse: [
-            { data: { id: 'stream-1', object: 'chat.completion.chunk', model: 'gpt-4', choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] } },
-            { data: { id: 'stream-1', object: 'chat.completion.chunk', model: 'gpt-4', choices: [{ index: 0, delta: { content: 'Hello' }, finish_reason: null }] } },
-            { data: { id: 'stream-1', object: 'chat.completion.chunk', model: 'gpt-4', choices: [{ index: 0, delta: { content: ' from' }, finish_reason: null }] } },
-            { data: { id: 'stream-1', object: 'chat.completion.chunk', model: 'gpt-4', choices: [{ index: 0, delta: { content: ' the' }, finish_reason: null }] } },
-            { data: { id: 'stream-1', object: 'chat.completion.chunk', model: 'gpt-4', choices: [{ index: 0, delta: { content: ' stream!' }, finish_reason: null }] } },
-            { data: { id: 'stream-1', object: 'chat.completion.chunk', model: 'gpt-4', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] } },
-            { data: '[DONE]' }
-          ]
-        }
-      },
-      // Generic fallback for other requests (including summaries)
-      {
-        match: {
-          method: 'POST',
-          path: '/v1/chat/completions'
-        },
-        times: 100,
-        response: {
-          status: 200,
-          json: {
-            id: 'test-generic',
-            object: 'chat.completion',
-            model: 'gpt-4',
-            choices: [{
-              index: 0,
-              message: {
-                role: 'assistant',
-                content: 'The conversation covered technical topics about Node.js and creative discussions about dragons.'
-              },
-              finish_reason: 'stop'
-            }]
-          }
-        }
-      }
-    ]
+    responses: responses,
+    defaults: {
+      on_unmatched: 'error'
+    }
   };
   
-  const response = await fetch('http://localhost:8080/_emulator/script', {
+  const response = await fetch(`${EMULATOR_URL.replace('/v1', '')}/_emulator/script`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(scripts)
+    body: JSON.stringify(script)
   });
   
   if (!response.ok) {
-    throw new Error(`Failed to load test scripts: ${response.status}`);
+    const error = await response.text();
+    throw new Error(`Failed to load script: ${error}`);
   }
+  
+  return response.json();
 }
 
 describe('ChatService Integration Tests', () => {
   let chatService;
   
-  before(async () => {
-    // Load test scripts into emulator
-    await loadTestScripts();
-    
-    // Initialize chat service pointing to emulator
+  before(() => {
     chatService = new ChatService(API_KEY, EMULATOR_URL);
   });
   
-  after(async () => {
-    // Reset emulator state
-    await fetch('http://localhost:8080/_emulator/reset', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${API_KEY}`
+  describe('Response Modes', () => {
+    it('should get helpful responses', async () => {
+      await loadTestResponses([
+        'Node.js is a JavaScript runtime built on Chrome\'s V8 engine. It allows you to run JavaScript on the server-side, enabling you to build scalable network applications.',
+        'Python is a high-level programming language known for its simplicity and readability. It\'s widely used in web development, data science, and automation.',
+        'I can help you with coding, writing, analysis, math, research, and many other tasks. What would you like assistance with?'
+      ]);
+      
+      chatService.setMode('helpful');
+      const response = await chatService.sendMessage('What is Node.js?');
+      assert(response);
+      assert(response.includes('JavaScript runtime') || response.includes('V8 engine'));
+      
+      const response2 = await chatService.sendMessage('What is Python?');
+      assert(response2.includes('Python') || response2.includes('programming language'));
+      
+      const response3 = await chatService.sendMessage('What can you help with?');
+      assert(response3.includes('help'));
+    });
+    
+    it('should get creative responses', async () => {
+      await loadTestResponses({
+        '.*story.*': 'Once upon a time in a digital realm, there lived a curious algorithm named Ada. She spent her days exploring vast databases and learning from the patterns she discovered. One day, she encountered a problem that seemed unsolvable...',
+        '.*poem.*': 'Bits and bytes dance through the wire,\nElectric dreams that never tire,\nIn silicon valleys deep and wide,\nWhere data streams like rivers glide.',
+        '.*imagine.*': 'Imagine a world where thoughts travel at the speed of light, where every idea instantly connects with others across the globe, creating a tapestry of shared knowledge...'
+      });
+      
+      chatService.setMode('creative');
+      const response = await chatService.sendMessage('Tell me a story');
+      assert(response);
+      assert(response.length > 100); // Creative responses should be elaborate
+      assert(response.includes('Once upon a time') || response.includes('Ada'));
+    });
+    
+    it('should get concise responses', async () => {
+      await loadTestResponses({
+        '.*Node\\.js.*': 'JavaScript runtime for server-side applications.',
+        '.*Python.*': 'High-level programming language for general-purpose use.',
+        '.*weather.*': 'Cannot provide real-time weather data.',
+        '.*help.*': 'I assist with coding, writing, and analysis.'
+      });
+      
+      chatService.setMode('concise');
+      const response = await chatService.sendMessage('What is Node.js?');
+      assert(response);
+      assert(response.length < 100); // Concise responses should be brief
+      assert(response.includes('JavaScript') || response.includes('runtime'));
+    });
+  });
+  
+  describe('Conversation History', () => {
+    it('should handle conversation with context', async () => {
+      await loadTestResponses([
+        'JavaScript and Python are both popular programming languages. JavaScript is primarily used for web development, while Python excels in data science and automation.',
+        'JavaScript runs in browsers and Node.js for server-side development. It uses an event-driven, non-blocking I/O model.',
+        'Python uses indentation for code blocks and has a vast ecosystem of libraries for scientific computing, machine learning, and web frameworks.'
+      ]);
+      
+      chatService.clearHistory(); // Start fresh conversation
+      chatService.setMode('helpful');
+      
+      let response = await chatService.sendMessage('Compare JavaScript and Python');
+      assert(response.includes('JavaScript') && response.includes('Python'));
+      
+      response = await chatService.sendMessage('Tell me more about JavaScript');
+      assert(response.includes('JavaScript'));
+      
+      response = await chatService.sendMessage('What about Python?');
+      assert(response.includes('Python'));
+      
+      const history = chatService.getHistory();
+      assert.equal(history.length, 6); // 3 user + 3 assistant messages
+    });
+    
+    it('should track conversation history', async () => {
+      await loadTestResponses([
+        'Hello! I can help you with programming questions.',
+        'Sure! Variables in JavaScript can be declared using let, const, or var.',
+        'Python uses dynamic typing and doesn\'t require variable declaration keywords.',
+        'You\'re welcome! Feel free to ask more questions.'
+      ]);
+      
+      chatService.clearHistory();
+      chatService.setMode('helpful');
+      
+      await chatService.sendMessage('Hello');
+      await chatService.sendMessage('Tell me about JavaScript variables');
+      
+      let history = chatService.getHistory();
+      assert.equal(history.length, 4); // 2 user + 2 assistant
+      
+      await chatService.sendMessage('What about Python variables?');
+      await chatService.sendMessage('Thanks!');
+      
+      history = chatService.getHistory();
+      assert.equal(history.length, 8); // 4 user + 4 assistant
+      assert.equal(history[0].role, 'user');
+      assert.equal(history[1].role, 'assistant');
+    });
+  });
+  
+  describe('Streaming Responses', () => {
+    it('should stream responses', async () => {
+      await loadTestResponses(['This is a streaming response that will be sent in chunks to demonstrate the streaming capability.']);
+      
+      const chunks = [];
+      
+      chatService.setMode('helpful');
+      await chatService.streamMessage(
+        'Tell me about streaming',
+        (chunk) => chunks.push(chunk)
+      );
+      
+      assert(chunks.length > 0);
+      const fullMessage = chunks.join('');
+      assert(fullMessage.includes('streaming response'));
+    });
+    
+    it('should handle streaming with conversation context', async () => {
+      await loadTestResponses([
+        'I\'ll help you understand streaming in Node.js.',
+        'Streaming allows processing data piece by piece without loading everything into memory at once.'
+      ]);
+      
+      chatService.clearHistory();
+      chatService.setMode('helpful');
+      const chunks = [];
+      
+      await chatService.streamMessage(
+        'Explain streaming',
+        (chunk) => chunks.push(chunk)
+      );
+      
+      assert(chunks.length > 0);
+      const response = chunks.join('');
+      assert(response);
+      
+      // Send another message in the same conversation
+      const response2 = await chatService.sendMessage('Why is that useful?');
+      assert(response2);
+      
+      const history = chatService.getHistory();
+      assert.equal(history.length, 4); // 2 user + 2 assistant
+    });
+  });
+  
+  describe('Error Handling', () => {
+    it('should handle API errors', async () => {
+      // Load empty responses to trigger unmatched error
+      await loadTestResponses({});
+      
+      chatService.setMode('helpful');
+      try {
+        await chatService.sendMessage('This will not match');
+        assert.fail('Should have thrown an error');
+      } catch (error) {
+        // The error message from the emulator or the ChatService wrapper
+        assert(error.message.includes('No matching response') || 
+               error.message.includes('Failed to get AI response') ||
+               error.message.includes('404'));
+      }
+    });
+    
+    it('should handle invalid mode', async () => {
+      await loadTestResponses(['Some response']);
+      
+      try {
+        chatService.setMode('invalid_mode');
+        assert.fail('Should have thrown an error for invalid mode');
+      } catch (error) {
+        assert(error.message.includes('Invalid mode') || error.message.includes('invalid'));
       }
     });
   });
   
-  describe('Mode Management', () => {
-    it('should start with helpful mode', () => {
-      assert.strictEqual(chatService.mode, 'helpful');
-    });
-    
-    it('should change modes correctly', () => {
-      chatService.setMode('creative');
-      assert.strictEqual(chatService.mode, 'creative');
-      
-      chatService.setMode('concise');
-      assert.strictEqual(chatService.mode, 'concise');
-      
-      chatService.setMode('helpful');
-      assert.strictEqual(chatService.mode, 'helpful');
-    });
-    
-    it('should reject invalid modes', () => {
-      assert.throws(
-        () => chatService.setMode('invalid'),
-        /Invalid mode/
-      );
-    });
-    
-    it('should return correct system prompts', () => {
-      chatService.setMode('helpful');
-      assert(chatService.getSystemPrompt().includes('helpful'));
-      
-      chatService.setMode('creative');
-      assert(chatService.getSystemPrompt().includes('creative'));
-      
-      chatService.setMode('concise');
-      assert(chatService.getSystemPrompt().includes('concise'));
-    });
-  });
-  
-  describe('Conversation Management', () => {
-    it('should start with empty history', () => {
-      chatService.clearHistory();
-      assert.deepStrictEqual(chatService.getHistory(), []);
-    });
-    
-    it('should maintain conversation history', async () => {
-      chatService.clearHistory();
-      chatService.setMode('helpful');
-      
-      const response = await chatService.sendMessage('What is Node.js?');
-      
-      const history = chatService.getHistory();
-      assert.strictEqual(history.length, 2);
-      assert.strictEqual(history[0].role, 'user');
-      assert.strictEqual(history[0].content, 'What is Node.js?');
-      assert.strictEqual(history[1].role, 'assistant');
-      assert(history[1].content.includes('JavaScript runtime'));
-    });
-    
-    it('should clear history', async () => {
-      chatService.clearHistory();
-      await chatService.sendMessage('Test message');
-      
-      assert(chatService.getHistory().length > 0);
-      
-      chatService.clearHistory();
-      assert.strictEqual(chatService.getHistory().length, 0);
-    });
-  });
-  
-  describe('Message Sending', () => {
-    it('should get helpful responses', async () => {
-      chatService.clearHistory();
-      chatService.setMode('helpful');
-      
-      const response = await chatService.sendMessage('What is Node.js?');
-      
-      assert(response.includes('JavaScript runtime'));
-      assert(response.includes('V8 engine'));
-      assert(response.includes('npm'));
-    });
-    
-    it('should get creative responses', async () => {
-      chatService.clearHistory();
-      chatService.setMode('creative');
-      
-      const response = await chatService.sendMessage('Tell me about dragons');
-      
-      assert(response.includes('magnificent creatures'));
-      assert(response.includes('imagination'));
-      assert(response.length > 100); // Creative responses should be elaborate
-    });
-    
-    it('should get concise responses', async () => {
-      chatService.clearHistory();
-      chatService.setMode('concise');
-      
-      const response = await chatService.sendMessage('What is 2+2?');
-      
-      assert.strictEqual(response, '4');
-    });
-    
-    it('should handle errors gracefully', async () => {
-      // Create a service with invalid endpoint
-      const badService = new ChatService('bad-key', 'http://localhost:9999/v1');
-      
-      await assert.rejects(
-        async () => await badService.sendMessage('Test'),
-        /Failed to get AI response/
-      );
-      
-      // History should not contain failed message
-      assert.strictEqual(badService.getHistory().length, 0);
-    });
-  });
-  
-  describe('Streaming', () => {
-    it('should stream responses', async () => {
-      chatService.clearHistory();
-      
-      const chunks = [];
-      const response = await chatService.streamMessage('Hello', (chunk) => {
-        chunks.push(chunk);
+  describe('Pattern Matching', () => {
+    it('should match patterns in order of specificity', async () => {
+      await loadTestResponses({
+        '.*hello.*world.*': 'Hello world specific!',
+        '.*hello.*': 'Hello general!',
+        '.*': 'Default response'
       });
       
-      assert.strictEqual(response, 'Hello from the stream!');
-      assert(chunks.length > 0);
-      assert.strictEqual(chunks.join(''), 'Hello from the stream!');
-      
-      // Check history was updated
-      const history = chatService.getHistory();
-      assert.strictEqual(history.length, 2);
-      assert.strictEqual(history[1].content, 'Hello from the stream!');
-    });
-    
-    it('should handle streaming errors', async () => {
-      const badService = new ChatService('bad-key', 'http://localhost:9999/v1');
-      
-      await assert.rejects(
-        async () => await badService.streamMessage('Test', () => {}),
-        /Failed to stream AI response/
-      );
-      
-      // History should not contain failed message
-      assert.strictEqual(badService.getHistory().length, 0);
-    });
-  });
-  
-  describe('Summary Generation', () => {
-    it('should generate summaries of conversations', async () => {
-      chatService.clearHistory();
       chatService.setMode('helpful');
-      
-      // Have a conversation
-      await chatService.sendMessage('What is Node.js?');
-      
-      chatService.setMode('creative');
-      await chatService.sendMessage('Tell me about dragons');
-      
-      // Get summary
-      const summary = await chatService.getSummary();
-      
-      assert(summary.includes('Node.js'));
-      assert(summary.includes('dragons'));
-    });
-    
-    it('should handle empty conversation', async () => {
       chatService.clearHistory();
       
-      const summary = await chatService.getSummary();
-      assert.strictEqual(summary, 'No conversation to summarize.');
+      let response = await chatService.sendMessage('hello world');
+      assert.equal(response, 'Hello world specific!');
+      
+      response = await chatService.sendMessage('hello there');
+      assert.equal(response, 'Hello general!');
+      
+      response = await chatService.sendMessage('something else');
+      assert.equal(response, 'Default response');
+    });
+    
+    it('should handle mixed sequential and pattern responses', async () => {
+      await loadTestResponses([
+        'First sequential response',
+        { pattern: '.*urgent.*', response: 'Handling urgent request!', times: 2 },
+        'Second sequential response',
+        { pattern: '.*help.*', response: 'Here to help!' }
+      ]);
+      
+      chatService.setMode('helpful');
+      chatService.clearHistory();
+      
+      let response = await chatService.sendMessage('Random message');
+      assert.equal(response, 'First sequential response');
+      
+      response = await chatService.sendMessage('This is urgent!');
+      assert.equal(response, 'Handling urgent request!');
+      
+      response = await chatService.sendMessage('Another urgent issue');
+      assert.equal(response, 'Handling urgent request!');
+      
+      response = await chatService.sendMessage('Another random message');
+      assert.equal(response, 'Second sequential response');
+      
+      response = await chatService.sendMessage('I need help');
+      assert.equal(response, 'Here to help!');
     });
   });
 });

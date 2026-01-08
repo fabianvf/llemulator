@@ -45,4 +45,8 @@ echo "Running Python conformance tests..."
 (cd conformance/python && python -m pytest test_conformance.py -v)
 
 echo ""
+echo "Running example app tests..."
+(cd example-app && npm install --silent && npm test)
+
+echo ""
 echo "All tests passed!"
