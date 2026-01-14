@@ -11,20 +11,10 @@ async function withResponses(responses, testFn) {
   return testFn();
 }
 
-// Helper to load advanced rules
-async function withRules(rules, testFn) {
-  await loadScript({ rules });
-  return testFn();
-}
-
 async function loadScript(config) {
   const script = {
     reset: true,
     ...config,
-    defaults: {
-      on_unmatched: 'error',
-      ...(config.defaults || {}),
-    },
   };
   
   const response = await fetch(`${EMULATOR_URL}/_emulator/script`, {

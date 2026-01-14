@@ -20,7 +20,6 @@ def load_responses(responses):
             script = {
                 "reset": True,
                 "responses": responses,
-                "defaults": {"on_unmatched": "error"},
             }
             
             response = httpx.post(
@@ -33,31 +32,6 @@ def load_responses(responses):
                 raise Exception(f"Failed to load test script: {response.status_code} - {response.text}")
             
             # Run the test
-            return func(*args, **kwargs)
-        return wrapper
-    return decorator
-
-
-def load_rules(rules):
-    """Decorator for advanced rule-based responses (models, errors, etc)."""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            script = {
-                "reset": True,
-                "rules": rules,
-                "defaults": {"on_unmatched": "error"},
-            }
-            
-            response = httpx.post(
-                f"{EMULATOR_URL}/_emulator/script",
-                headers={"Authorization": f"Bearer {API_KEY}"},
-                json=script,
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"Failed to load test script: {response.status_code} - {response.text}")
-            
             return func(*args, **kwargs)
         return wrapper
     return decorator
