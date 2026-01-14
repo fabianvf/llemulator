@@ -135,10 +135,12 @@ func (e *Engine) GetModels(token string) []string {
 
 	// Return default models
 	return []string{
-		"gpt-4", "gpt-4-turbo", "gpt-4-turbo-preview",
-		"gpt-3.5-turbo", "gpt-3.5-turbo-16k",
+		"gpt-4", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4-turbo-preview",
+		"gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-3.5-turbo-1106",
 		"text-davinci-003", "text-davinci-002",
-		"text-embedding-ada-002",
+		"text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large",
+		"claude-3-opus", "claude-3-sonnet", "claude-3-haiku",
+		"claude-3-5-sonnet-latest", "claude-3-5-haiku-latest",
 	}
 }
 
