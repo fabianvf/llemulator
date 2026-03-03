@@ -368,9 +368,14 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 	flusher.Flush()
 	time.Sleep(10 * time.Millisecond)
 
-	// Send content in chunks
-	words := strings.Fields(content)
-	for i, word := range words {
+	// Send content in chunks - split by lines to preserve newlines
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lineContent := line
+		if i < len(lines)-1 {
+			lineContent += "\n"
+		}
+
 		chunk := models.ChatCompletion{
 			ID:      id,
 			Object:  "chat.completion.chunk",
@@ -380,14 +385,10 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 				{
 					Index: 0,
 					Delta: &models.ChatMessage{
-						Content: word,
+						Content: lineContent,
 					},
 				},
 			},
-		}
-
-		if i < len(words)-1 {
-			chunk.Choices[0].Delta.Content += " "
 		}
 
 		data, _ := json.Marshal(chunk)
