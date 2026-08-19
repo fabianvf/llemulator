@@ -13,7 +13,7 @@ import (
 type Rule struct {
 	Pattern  string `json:"pattern,omitempty"` // Optional regex pattern
 	Response string `json:"response"`          // Response content
-	Times    int    `json:"times,omitempty"`   // How many times to match (-1 = unlimited, 0 = exhausted)
+	Times    int    `json:"times,omitempty"`   // How many times to match (-1 = unlimited, 0 = exhausted); see explicitRuleTimes
 	// ToolCalls turns the reply into a request for the client to run something,
 	// rather than text. A rule that sets these usually wants Times: 1, since the
 	// client sends the result back and the same rule would otherwise match the
@@ -66,7 +66,10 @@ func (e *Engine) LoadScript(token string, script Script) error {
 	}
 
 	// Add explicit rules
-	rules = append(rules, script.Rules...)
+	for _, rule := range script.Rules {
+		rule.Times = explicitRuleTimes(rule)
+		rules = append(rules, rule)
+	}
 
 	// Create or reset session
 	session, exists := e.sessions[token]
@@ -220,6 +223,25 @@ func processResponses(responses interface{}) ([]Rule, error) {
 	}
 
 	return rules, nil
+}
+
+// explicitRuleTimes says how often a rule from the "rules" field fires. The
+// field is omitempty, so a rule written without "times" arrives as 0, which the
+// matcher treats as exhausted and skips forever: the rule would never fire and
+// every request would 500. Unlimited is the useful default. Tool-call rules
+// fire once, since the client answers with the result and the last user message
+// is unchanged, so an unlimited rule would call the same tool forever.
+//
+// The array form of "responses" is sequential and keeps its own default of 1.
+func explicitRuleTimes(r Rule) int {
+	switch {
+	case r.Times != 0:
+		return r.Times
+	case len(r.ToolCalls) > 0:
+		return 1
+	default:
+		return -1
+	}
 }
 
 // ruleFromMap reads one rule out of the simplified array form. A rule may

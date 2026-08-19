@@ -141,6 +141,28 @@ curl -X POST http://localhost:8080/_emulator/script \
   }'
 ```
 
+### Explicit Rules
+
+`rules` takes the same fields without the shorthand:
+
+```bash
+curl -X POST http://localhost:8080/_emulator/script \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset": true,
+    "rules": [
+      {"pattern": ".*hello.*", "response": "Hi there!", "times": 1},
+      {"pattern": "", "response": "Anything else."}
+    ]
+  }'
+```
+
+An empty `pattern` always matches, so the rule above answers every request that
+falls through. A rule with no `times` is unlimited, except a tool-call rule,
+which fires once. The sequential array form of `responses` is unchanged: each
+entry still fires once, in order.
+
 ### Tool Calls
 
 A rule can answer with a tool call instead of text, so an agent under test
