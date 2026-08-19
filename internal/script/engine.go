@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+
+	"github.com/fabianvf/llemulator/internal/models"
 )
 
 // Rule represents a simple matching rule
@@ -12,6 +14,11 @@ type Rule struct {
 	Pattern  string `json:"pattern,omitempty"` // Optional regex pattern
 	Response string `json:"response"`          // Response content
 	Times    int    `json:"times,omitempty"`   // How many times to match (-1 = unlimited, 0 = exhausted)
+	// ToolCalls turns the reply into a request for the client to run something,
+	// rather than text. A rule that sets these usually wants Times: 1, since the
+	// client sends the result back and the same rule would otherwise match the
+	// same last user message again and loop.
+	ToolCalls []models.ToolCall `json:"tool_calls,omitempty"`
 }
 
 // Script represents a script configuration
@@ -80,14 +87,27 @@ func (e *Engine) LoadScript(token string, script Script) error {
 	return nil
 }
 
-// MatchRequest finds a response for a request
+// MatchRequest finds a response for a request.
+//
+// Kept returning the content alone so existing callers are unaffected; use
+// MatchRule when the reply might be a tool call.
 func (e *Engine) MatchRequest(token string, message string) (string, error) {
+	rule, err := e.MatchRule(token, message)
+	if err != nil {
+		return "", err
+	}
+	return rule.Response, nil
+}
+
+// MatchRule finds the whole rule for a request, so the caller can see whether
+// the reply is text or a tool call.
+func (e *Engine) MatchRule(token string, message string) (Rule, error) {
 	e.mu.RLock()
 	session, exists := e.sessions[token]
 	e.mu.RUnlock()
 
 	if !exists {
-		return "", fmt.Errorf("no script loaded for token")
+		return Rule{}, fmt.Errorf("no script loaded for token")
 	}
 
 	session.mu.Lock()
@@ -106,11 +126,11 @@ func (e *Engine) MatchRequest(token string, message string) (string, error) {
 			if session.rules[i].Times > 0 {
 				session.rules[i].Times--
 			}
-			return rule.Response, nil
+			return rule, nil
 		}
 	}
 
-	return "", fmt.Errorf("no matching rule for message: %s", message)
+	return Rule{}, fmt.Errorf("no matching rule for message: %s", message)
 }
 
 // Reset clears session for a token
@@ -170,18 +190,8 @@ func processResponses(responses interface{}) ([]Rule, error) {
 				})
 			} else if ruleMap, ok := item.(map[string]interface{}); ok {
 				// Mixed mode: can have patterns in array
-				if pattern, hasPattern := ruleMap["pattern"].(string); hasPattern {
-					if response, hasResponse := ruleMap["response"].(string); hasResponse {
-						times := 1
-						if t, hasT := ruleMap["times"].(float64); hasT {
-							times = int(t)
-						}
-						rules = append(rules, Rule{
-							Pattern:  pattern,
-							Response: response,
-							Times:    times,
-						})
-					}
+				if rule, ok := ruleFromMap(ruleMap); ok {
+					rules = append(rules, rule)
 				}
 			}
 		}
@@ -210,6 +220,46 @@ func processResponses(responses interface{}) ([]Rule, error) {
 	}
 
 	return rules, nil
+}
+
+// ruleFromMap reads one rule out of the simplified array form. A rule may
+// answer with text, with tool calls, or with both, so "response" is no longer
+// required when "tool_calls" is present.
+func ruleFromMap(m map[string]interface{}) (Rule, bool) {
+	pattern, _ := m["pattern"].(string)
+	response, hasResponse := m["response"].(string)
+
+	var toolCalls []models.ToolCall
+	if raw, ok := m["tool_calls"]; ok {
+		// Re-marshal rather than hand-walk the map: the wire shape is the
+		// OpenAI one and json already knows how to read it.
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return Rule{}, false
+		}
+		if err := json.Unmarshal(encoded, &toolCalls); err != nil {
+			return Rule{}, false
+		}
+	}
+
+	if !hasResponse && len(toolCalls) == 0 {
+		return Rule{}, false
+	}
+
+	// A tool call is answered by the client and the conversation continues, so
+	// default it to firing once; matching the same last user message again
+	// would otherwise repeat the call forever.
+	times := 1
+	if t, ok := m["times"].(float64); ok {
+		times = int(t)
+	}
+
+	return Rule{
+		Pattern:   pattern,
+		Response:  response,
+		Times:     times,
+		ToolCalls: toolCalls,
+	}, true
 }
 
 // matchesPattern checks if text matches a regex pattern

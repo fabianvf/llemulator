@@ -141,6 +141,39 @@ curl -X POST http://localhost:8080/_emulator/script \
   }'
 ```
 
+### Tool Calls
+
+A rule can answer with a tool call instead of text, so an agent under test
+actually executes something:
+
+```bash
+curl -X POST http://localhost:8080/_emulator/script \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset": true,
+    "responses": [
+      {"pattern": ".*list the files.*", "tool_calls": [
+        {"id": "call_1", "type": "function",
+         "function": {"name": "shell", "arguments": "{\"command\":\"ls -1\"}"}}
+      ]},
+      {"pattern": "", "response": "all done", "times": -1}
+    ]
+  }'
+```
+
+The reply carries `finish_reason: "tool_calls"`, and the client is expected to
+run the function and send the result back as a `role: "tool"` message.
+
+Two things to know:
+
+- A tool-call rule defaults to `"times": 1`. The client answers with the result
+  and the last user message is unchanged, so an unlimited rule would match again
+  and the conversation would never end. Put a catch-all after it, as above, to
+  say what happens once the call has been made.
+- `function.arguments` is a JSON document encoded as a string, which is the
+  OpenAI wire format and what SDKs expect to parse.
+
 ## Kubernetes Deployment
 
 ```bash
