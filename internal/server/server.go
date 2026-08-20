@@ -382,6 +382,12 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 	// stream the arguments in fragments, but a client has to buffer them until
 	// the finish chunk either way, so one delta is a shape they already handle.
 	if len(toolCalls) > 0 {
+		indexed := make([]models.ToolCall, len(toolCalls))
+		for i, call := range toolCalls {
+			position := i
+			call.Index = &position
+			indexed[i] = call
+		}
 		chunk := models.ChatCompletion{
 			ID:      id,
 			Object:  "chat.completion.chunk",
@@ -390,7 +396,7 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 			Choices: []models.ChatChoice{
 				{
 					Index: 0,
-					Delta: &models.ChatMessage{ToolCalls: toolCalls},
+					Delta: &models.ChatMessage{ToolCalls: indexed},
 				},
 			},
 		}

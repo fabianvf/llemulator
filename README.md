@@ -195,6 +195,9 @@ Two things to know:
   say what happens once the call has been made.
 - `function.arguments` is a JSON document encoded as a string, which is the
   OpenAI wire format and what SDKs expect to parse.
+- Tool calls are chat completions only. `/v1/completions` and `/v1/responses`
+  have no place to put them, so a tool-call rule aimed at those endpoints
+  answers with empty text.
 
 ## Kubernetes Deployment
 

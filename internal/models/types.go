@@ -26,8 +26,13 @@ type ChatMessage struct {
 
 // ToolCall is one function call an assistant message asks the client to make.
 type ToolCall struct {
-	ID       string           `json:"id"`
-	Type     string           `json:"type"`
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	// Index positions the call within the message. SDKs key on it to
+	// reassemble calls streamed across deltas: openai-node drops a call that
+	// has none, and openai-python raises on it. It is a pointer because the
+	// non-streaming message does not carry the field at all.
+	Index    *int             `json:"index,omitempty"`
 	Function ToolCallFunction `json:"function"`
 }
 
