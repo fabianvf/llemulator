@@ -172,15 +172,15 @@ func (s *Server) HandleOpenAIRequest(w http.ResponseWriter, r *http.Request) {
 	// Extract user message from request
 	message := script.ExtractUserMessage(body)
 
-	// Get response content from engine
-	responseContent, err := s.engine.MatchRequest(token, message)
+	// Get the matching rule from the engine
+	rule, err := s.engine.MatchRule(token, message)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("No matching rule: %v", err), "server_error", nil, nil)
 		return
 	}
 
 	// Write the response in appropriate format for the endpoint
-	s.writeFormattedResponse(w, r.URL.Path, body, responseContent)
+	s.writeFormattedResponse(w, r.URL.Path, body, rule.Response, rule.ToolCalls)
 }
 
 func readRequestBody(r *http.Request) ([]byte, error) {
@@ -197,7 +197,7 @@ func (s *Server) logDebug(r *http.Request, token string, body []byte) {
 	}
 }
 
-func (s *Server) writeFormattedResponse(w http.ResponseWriter, path string, requestBody []byte, content string) {
+func (s *Server) writeFormattedResponse(w http.ResponseWriter, path string, requestBody []byte, content string, toolCalls []models.ToolCall) {
 	// Parse request to check if streaming is requested
 	var req map[string]interface{}
 	json.Unmarshal(requestBody, &req)
@@ -209,9 +209,9 @@ func (s *Server) writeFormattedResponse(w http.ResponseWriter, path string, requ
 	// Format response based on endpoint
 	if strings.Contains(path, "/chat/completions") {
 		if isStreaming {
-			s.writeChatCompletionStream(w, content, req)
+			s.writeChatCompletionStream(w, content, toolCalls, req)
 		} else {
-			s.writeChatCompletion(w, content, req, http.StatusOK)
+			s.writeChatCompletion(w, content, toolCalls, req, http.StatusOK)
 		}
 	} else if strings.Contains(path, "/completions") || strings.Contains(path, "/responses") {
 		if isStreaming {
@@ -295,7 +295,7 @@ func (s *Server) writeModelResponse(w http.ResponseWriter, path string, token st
 	}
 }
 
-func (s *Server) writeChatCompletion(w http.ResponseWriter, content string, req map[string]interface{}, status int) {
+func (s *Server) writeChatCompletion(w http.ResponseWriter, content string, toolCalls []models.ToolCall, req map[string]interface{}, status int) {
 	model := "gpt-4"
 	if m, ok := req["model"].(string); ok {
 		model = m
@@ -310,10 +310,11 @@ func (s *Server) writeChatCompletion(w http.ResponseWriter, content string, req 
 			{
 				Index: 0,
 				Message: &models.ChatMessage{
-					Role:    "assistant",
-					Content: content,
+					Role:      "assistant",
+					Content:   content,
+					ToolCalls: toolCalls,
 				},
-				FinishReason: stringPtr("stop"),
+				FinishReason: stringPtr(finishReason(toolCalls)),
 			},
 		},
 		Usage: &models.Usage{
@@ -332,7 +333,16 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string, req map[string]interface{}) {
+// finishReason tells the client whether the turn ended or whether it is now
+// expected to run something and come back with the result.
+func finishReason(toolCalls []models.ToolCall) string {
+	if len(toolCalls) > 0 {
+		return "tool_calls"
+	}
+	return "stop"
+}
+
+func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string, toolCalls []models.ToolCall, req map[string]interface{}) {
 	model := "gpt-4"
 	if m, ok := req["model"].(string); ok {
 		model = m
@@ -367,6 +377,34 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
 	time.Sleep(10 * time.Millisecond)
+
+	// A tool call arrives whole rather than split across deltas. Real providers
+	// stream the arguments in fragments, but a client has to buffer them until
+	// the finish chunk either way, so one delta is a shape they already handle.
+	if len(toolCalls) > 0 {
+		indexed := make([]models.ToolCall, len(toolCalls))
+		for i, call := range toolCalls {
+			position := i
+			call.Index = &position
+			indexed[i] = call
+		}
+		chunk := models.ChatCompletion{
+			ID:      id,
+			Object:  "chat.completion.chunk",
+			Created: time.Now().Unix(),
+			Model:   model,
+			Choices: []models.ChatChoice{
+				{
+					Index: 0,
+					Delta: &models.ChatMessage{ToolCalls: indexed},
+				},
+			},
+		}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Send content in chunks - split by lines to preserve newlines
 	lines := strings.Split(content, "\n")
@@ -407,7 +445,7 @@ func (s *Server) writeChatCompletionStream(w http.ResponseWriter, content string
 			{
 				Index:        0,
 				Delta:        &models.ChatMessage{},
-				FinishReason: stringPtr("stop"),
+				FinishReason: stringPtr(finishReason(toolCalls)),
 			},
 		},
 	}

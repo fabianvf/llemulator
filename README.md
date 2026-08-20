@@ -141,6 +141,64 @@ curl -X POST http://localhost:8080/_emulator/script \
   }'
 ```
 
+### Explicit Rules
+
+`rules` takes the same fields without the shorthand:
+
+```bash
+curl -X POST http://localhost:8080/_emulator/script \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset": true,
+    "rules": [
+      {"pattern": ".*hello.*", "response": "Hi there!", "times": 1},
+      {"pattern": "", "response": "Anything else."}
+    ]
+  }'
+```
+
+An empty `pattern` always matches, so the rule above answers every request that
+falls through. A rule with no `times` is unlimited, except a tool-call rule,
+which fires once. The sequential array form of `responses` is unchanged: each
+entry still fires once, in order.
+
+### Tool Calls
+
+A rule can answer with a tool call instead of text, so an agent under test
+actually executes something:
+
+```bash
+curl -X POST http://localhost:8080/_emulator/script \
+  -H "Authorization: Bearer test-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset": true,
+    "responses": [
+      {"pattern": ".*list the files.*", "tool_calls": [
+        {"id": "call_1", "type": "function",
+         "function": {"name": "shell", "arguments": "{\"command\":\"ls -1\"}"}}
+      ]},
+      {"pattern": "", "response": "all done", "times": -1}
+    ]
+  }'
+```
+
+The reply carries `finish_reason: "tool_calls"`, and the client is expected to
+run the function and send the result back as a `role: "tool"` message.
+
+Two things to know:
+
+- A tool-call rule defaults to `"times": 1`. The client answers with the result
+  and the last user message is unchanged, so an unlimited rule would match again
+  and the conversation would never end. Put a catch-all after it, as above, to
+  say what happens once the call has been made.
+- `function.arguments` is a JSON document encoded as a string, which is the
+  OpenAI wire format and what SDKs expect to parse.
+- Tool calls are chat completions only. `/v1/completions` and `/v1/responses`
+  have no place to put them, so a tool-call rule aimed at those endpoints
+  answers with empty text.
+
 ## Kubernetes Deployment
 
 ```bash

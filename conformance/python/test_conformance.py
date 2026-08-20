@@ -336,11 +336,12 @@ class TestErrorHandling:
         assert exc_info.value is not None
     
     def test_missing_authorization(self):
-        """Test missing auth token."""
-        unauthorized_client = OpenAI(
-            api_key='',
-            base_url=f"{EMULATOR_URL}/v1",
-        )
-        
-        with pytest.raises(Exception):
-            unauthorized_client.models.list()
+        """A request without a bearer token is refused.
+
+        Sent with httpx rather than the SDK: since openai 3.x the client
+        raises on an empty api_key when it is constructed, so the request
+        under test was never reaching the emulator.
+        """
+        response = httpx.get(f"{EMULATOR_URL}/v1/models")
+
+        assert response.status_code == 401

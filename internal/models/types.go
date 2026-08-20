@@ -15,6 +15,33 @@ type ModelList struct {
 type ChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls is set on an assistant message that is asking the client to run
+	// something. Omitted on ordinary text replies, so existing responses are
+	// byte-for-byte what they were.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID identifies which call a role:"tool" message is answering. Only
+	// read from requests; clients send it back with the result.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is one function call an assistant message asks the client to make.
+type ToolCall struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	// Index positions the call within the message. SDKs key on it to
+	// reassemble calls streamed across deltas: openai-node drops a call that
+	// has none, and openai-python raises on it. It is a pointer because the
+	// non-streaming message does not carry the field at all.
+	Index    *int             `json:"index,omitempty"`
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction names the function and carries its arguments. Arguments is a
+// JSON document encoded as a string, which is what the OpenAI wire format uses
+// and what SDKs expect to hand to json.loads.
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type ChatCompletionRequest struct {
