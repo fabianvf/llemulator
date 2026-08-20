@@ -13,7 +13,15 @@ import (
 type Rule struct {
 	Pattern  string `json:"pattern,omitempty"` // Optional regex pattern
 	Response string `json:"response"`          // Response content
-	Times    int    `json:"times,omitempty"`   // How many times to match (-1 = unlimited, 0 = exhausted); see explicitRuleTimes
+	// Times is how many matches the rule has left: a positive count the matcher
+	// decrements, -1 for unlimited, 0 for exhausted and skipped from then on.
+	//
+	// The field is omitempty, so a rule loaded through the "rules" field
+	// without a "times" arrives as 0 and would never fire. explicitRuleTimes
+	// rewrites that on load, which is why 0 there reads as "not specified"
+	// rather than exhausted. The array form of "responses" sets its own
+	// defaults and passes an explicit "times" through as written.
+	Times int `json:"times,omitempty"`
 	// ToolCalls turns the reply into a request for the client to run something,
 	// rather than text. A rule that sets these usually wants Times: 1, since the
 	// client sends the result back and the same rule would otherwise match the
