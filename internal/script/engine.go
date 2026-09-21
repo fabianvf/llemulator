@@ -1,6 +1,7 @@
 package script
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -31,10 +32,18 @@ type Rule struct {
 
 // Script represents a script configuration
 type Script struct {
-	Reset     bool        `json:"reset"`
-	Rules     []Rule      `json:"rules,omitempty"`     // Explicit rules
-	Responses interface{} `json:"responses,omitempty"` // Simplified format (array or map)
-	Models    []string    `json:"models,omitempty"`    // Custom model list
+	Reset bool   `json:"reset"`
+	Rules []Rule `json:"rules,omitempty"` // Explicit rules
+	// Responses is the simplified format (array, object or string) for
+	// callers that build a Script in Go. A script that arrives as JSON lands
+	// in ResponsesJSON instead.
+	Responses interface{} `json:"-"`
+	// ResponsesJSON is the same field as it arrived on the wire. It is kept
+	// raw because the object form is order-sensitive - "the first matching
+	// pattern wins" - and decoding it into a Go map loses that order, making
+	// which rule wins depend on Go's randomised map iteration.
+	ResponsesJSON json.RawMessage `json:"responses,omitempty"`
+	Models        []string        `json:"models,omitempty"` // Custom model list
 }
 
 // Engine handles script execution with minimal complexity
@@ -64,8 +73,15 @@ func (e *Engine) LoadScript(token string, script Script) error {
 
 	var rules []Rule
 
-	// Process simplified response format
-	if script.Responses != nil {
+	// Process simplified response format. The raw form wins when present,
+	// since only it can preserve the order the patterns were written in.
+	if len(script.ResponsesJSON) > 0 {
+		processedRules, err := rulesFromJSON(script.ResponsesJSON)
+		if err != nil {
+			return err
+		}
+		rules = append(rules, processedRules...)
+	} else if script.Responses != nil {
 		processedRules, err := processResponses(script.Responses)
 		if err != nil {
 			return err
@@ -186,6 +202,64 @@ func (e *Engine) ValidateModel(token string, model string) bool {
 	return false
 }
 
+// rulesFromJSON converts the "responses" field as it arrived on the wire.
+//
+// The object form has to be walked as a token stream rather than unmarshalled,
+// because {"a": ..., "b": ...} becomes a Go map and ranging a map is
+// deliberately randomised. With three patterns where one is ".*", that made
+// the documented "first matching pattern wins" behaviour a coin toss: the
+// catch-all won roughly a third of the time, which read as a flaky test rather
+// than as the ordering being lost.
+func rulesFromJSON(raw json.RawMessage) ([]Rule, error) {
+	trimmed := bytes.TrimLeft(raw, " \t\r\n")
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	if trimmed[0] != '{' {
+		var decoded interface{}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return nil, err
+		}
+		return processResponses(decoded)
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	if _, err := dec.Token(); err != nil { // consume '{'
+		return nil, err
+	}
+
+	var rules []Rule
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		pattern, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("response key is not a string")
+		}
+		var value interface{}
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		switch v := value.(type) {
+		case string:
+			rules = append(rules, Rule{
+				Pattern:  pattern,
+				Response: v,
+				Times:    -1, // Unlimited for pattern-based
+			})
+		case map[string]interface{}:
+			// {"pattern": {"response": ..., "tool_calls": [...]}}
+			if rule, ok := ruleFromMap(v); ok {
+				rule.Pattern = pattern
+				rules = append(rules, rule)
+			}
+		}
+	}
+	return rules, nil
+}
+
 // processResponses converts simplified formats to rules
 func processResponses(responses interface{}) ([]Rule, error) {
 	var rules []Rule
@@ -208,7 +282,9 @@ func processResponses(responses interface{}) ([]Rule, error) {
 		}
 
 	case map[string]interface{}:
-		// Pattern-based: {"pattern": "response", ...}
+		// Only reached for a Script built in Go. An object that arrived as
+		// JSON is handled by orderedObjectRules, because ranging a Go map
+		// randomises the order and the first matching pattern is meant to win.
 		for pattern, response := range v {
 			if respStr, ok := response.(string); ok {
 				rules = append(rules, Rule{
